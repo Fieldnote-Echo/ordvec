@@ -13,6 +13,20 @@
 //!
 //! The shape mirrors [`crate::io`] for `TurboQuantIndex`. ID-map wrappers
 //! (analogous to `.tvim`) are an obvious follow-up but not in this v1.
+//!
+//! # Safety against malformed files
+//!
+//! All loaders validate header fields *before* allocating the payload
+//! buffer:
+//! * `dim` and `n_vectors` are bounded by [`MAX_DIM`] and [`MAX_VECTORS`]
+//!   (chosen so a worst-case index fits in 128 GiB).
+//! * `bits` is checked against `{1, 2, 4}` before any multiplication.
+//! * Total payload size is computed via [`usize::checked_mul`] and
+//!   rejected if it overflows.
+//! * Per-index invariants (e.g., `dim % (1 << bits) == 0` for RankQuant)
+//!   are returned as `Err(InvalidData)`, never `assert!`'d.
+//!
+//! Any malformed input returns `io::Error` rather than panicking.
 
 use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Write};
@@ -22,6 +36,49 @@ const TVR_MAGIC: &[u8; 4] = b"TVR1";
 const TVRQ_MAGIC: &[u8; 4] = b"TVRQ";
 const TVBM_MAGIC: &[u8; 4] = b"TVBM";
 const VERSION: u8 = 1;
+
+/// Largest accepted `dim` from a loaded file. Matches `u16::MAX` so the
+/// rank transform's `u16` invariant in [`crate::RankIndex`] is honoured.
+pub const MAX_DIM: usize = u16::MAX as usize;
+/// Largest accepted `n_vectors` from a loaded file. 64 M docs at
+/// `dim=u16::MAX` (128 KiB / vec for u16 ranks) tops out at ~8 TiB,
+/// well past any sane on-disk index. Chosen to fail loud before
+/// allocation panics.
+pub const MAX_VECTORS: usize = 64 * 1024 * 1024;
+
+fn invalid<S: Into<String>>(msg: S) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, msg.into())
+}
+
+fn check_dim(dim: usize) -> io::Result<()> {
+    if dim < 2 || dim > MAX_DIM {
+        return Err(invalid(format!(
+            "dim {dim} out of range [2, {MAX_DIM}]"
+        )));
+    }
+    Ok(())
+}
+
+fn check_n_vectors(n_vectors: usize) -> io::Result<()> {
+    if n_vectors > MAX_VECTORS {
+        return Err(invalid(format!(
+            "n_vectors {n_vectors} exceeds MAX_VECTORS={MAX_VECTORS}"
+        )));
+    }
+    Ok(())
+}
+
+fn check_payload_bytes(payload_bytes: usize) -> io::Result<()> {
+    // 128 GiB hard cap — refuses absurd allocations from a corrupt
+    // header even if dim and n_vectors individually pass.
+    const MAX_PAYLOAD: usize = 128 * 1024 * 1024 * 1024;
+    if payload_bytes > MAX_PAYLOAD {
+        return Err(invalid(format!(
+            "payload {payload_bytes} B exceeds MAX_PAYLOAD={MAX_PAYLOAD}"
+        )));
+    }
+    Ok(())
+}
 
 // -------------------------------------------------------------------
 // RankIndex: u16 ranks per coordinate.
@@ -53,26 +110,27 @@ pub fn load_rank(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u16>)>
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != TVR_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not a TVR1 file: wrong magic",
-        ));
+        return Err(invalid("not a TVR1 file: wrong magic"));
     }
     let mut ver = [0u8; 1];
     f.read_exact(&mut ver)?;
     if ver[0] != VERSION {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unsupported TVR1 version: {}", ver[0]),
-        ));
+        return Err(invalid(format!("unsupported TVR1 version: {}", ver[0])));
     }
     let mut dim_buf = [0u8; 4];
     f.read_exact(&mut dim_buf)?;
     let dim = u32::from_le_bytes(dim_buf) as usize;
+    check_dim(dim)?;
     let mut n_buf = [0u8; 4];
     f.read_exact(&mut n_buf)?;
     let n_vectors = u32::from_le_bytes(n_buf) as usize;
-    let mut bytes = vec![0u8; n_vectors * dim * 2];
+    check_n_vectors(n_vectors)?;
+    let payload_bytes = n_vectors
+        .checked_mul(dim)
+        .and_then(|x| x.checked_mul(2))
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    let mut bytes = vec![0u8; payload_bytes];
     f.read_exact(&mut bytes)?;
     let ranks: Vec<u16> = bytes
         .chunks_exact(2)
@@ -112,30 +170,36 @@ pub fn load_rankquant(path: impl AsRef<Path>) -> io::Result<(u8, usize, usize, V
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != TVRQ_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not a TVRQ file: wrong magic",
-        ));
+        return Err(invalid("not a TVRQ file: wrong magic"));
     }
     let mut ver = [0u8; 1];
     f.read_exact(&mut ver)?;
     if ver[0] != VERSION {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unsupported TVRQ version: {}", ver[0]),
-        ));
+        return Err(invalid(format!("unsupported TVRQ version: {}", ver[0])));
     }
     let mut bits_buf = [0u8; 1];
     f.read_exact(&mut bits_buf)?;
     let bits = bits_buf[0];
+    if !matches!(bits, 1 | 2 | 4) {
+        return Err(invalid(format!(
+            "unsupported TVRQ bits: {bits} (expected 1, 2, or 4)"
+        )));
+    }
     let mut dim_buf = [0u8; 4];
     f.read_exact(&mut dim_buf)?;
     let dim = u32::from_le_bytes(dim_buf) as usize;
+    check_dim(dim)?;
     let mut n_buf = [0u8; 4];
     f.read_exact(&mut n_buf)?;
     let n_vectors = u32::from_le_bytes(n_buf) as usize;
-    let packed_bytes = n_vectors * dim * bits as usize / 8;
-    let mut packed = vec![0u8; packed_bytes];
+    check_n_vectors(n_vectors)?;
+    let payload_bytes = n_vectors
+        .checked_mul(dim)
+        .and_then(|x| x.checked_mul(bits as usize))
+        .map(|x| x / 8)
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    let mut packed = vec![0u8; payload_bytes];
     f.read_exact(&mut packed)?;
     Ok((bits, dim, n_vectors, packed))
 }
@@ -175,30 +239,41 @@ pub fn load_bitmap(
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != TVBM_MAGIC {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "not a TVBM file: wrong magic",
-        ));
+        return Err(invalid("not a TVBM file: wrong magic"));
     }
     let mut ver = [0u8; 1];
     f.read_exact(&mut ver)?;
     if ver[0] != VERSION {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unsupported TVBM version: {}", ver[0]),
-        ));
+        return Err(invalid(format!("unsupported TVBM version: {}", ver[0])));
     }
     let mut dim_buf = [0u8; 4];
     f.read_exact(&mut dim_buf)?;
     let dim = u32::from_le_bytes(dim_buf) as usize;
+    check_dim(dim)?;
+    if dim % 64 != 0 {
+        return Err(invalid(format!(
+            "TVBM dim {dim} is not a multiple of 64"
+        )));
+    }
     let mut top_buf = [0u8; 4];
     f.read_exact(&mut top_buf)?;
     let n_top = u32::from_le_bytes(top_buf) as usize;
+    if n_top == 0 || n_top >= dim {
+        return Err(invalid(format!(
+            "TVBM n_top {n_top} must satisfy 0 < n_top < dim ({dim})"
+        )));
+    }
     let mut n_buf = [0u8; 4];
     f.read_exact(&mut n_buf)?;
     let n_vectors = u32::from_le_bytes(n_buf) as usize;
+    check_n_vectors(n_vectors)?;
     let qpv = dim / 64;
-    let mut bytes = vec![0u8; n_vectors * qpv * 8];
+    let payload_bytes = n_vectors
+        .checked_mul(qpv)
+        .and_then(|x| x.checked_mul(8))
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    let mut bytes = vec![0u8; payload_bytes];
     f.read_exact(&mut bytes)?;
     let bitmaps: Vec<u64> = bytes
         .chunks_exact(8)
