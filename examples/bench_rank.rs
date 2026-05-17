@@ -18,7 +18,7 @@ use rand_chacha::ChaCha8Rng;
 use std::time::Instant;
 use turbovec::{RankIndex, RankQuantIndex, TurboQuantIndex};
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct Config {
     dim: usize,
     n: usize,
@@ -27,6 +27,13 @@ struct Config {
     n_clusters: usize,
     latent_dim: usize,
     encode_threads_note: bool,
+    /// Optional path to a NumPy .npy file holding the corpus as
+    /// `(n, dim)` little-endian float32. When set, `--n` and `--dim`
+    /// are overridden by the file's shape.
+    corpus_npy: Option<String>,
+    /// Optional path to a NumPy .npy file holding queries as
+    /// `(n_q, dim)` little-endian float32.
+    queries_npy: Option<String>,
 }
 
 fn parse_args() -> Config {
@@ -38,6 +45,8 @@ fn parse_args() -> Config {
         n_clusters: 200,
         latent_dim: 64,
         encode_threads_note: true,
+        corpus_npy: None,
+        queries_npy: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -48,10 +57,67 @@ fn parse_args() -> Config {
             "--k" => cfg.k = args.next().unwrap().parse().unwrap(),
             "--clusters" => cfg.n_clusters = args.next().unwrap().parse().unwrap(),
             "--latent" => cfg.latent_dim = args.next().unwrap().parse().unwrap(),
+            "--corpus-npy" => cfg.corpus_npy = Some(args.next().unwrap()),
+            "--queries-npy" => cfg.queries_npy = Some(args.next().unwrap()),
             other => panic!("unknown arg {other}"),
         }
     }
     cfg
+}
+
+/// Minimal NumPy v1 .npy reader for 2-D little-endian float32 arrays.
+///
+/// Returns `(flat_data_row_major, n, dim)`. Panics with a descriptive
+/// message on any format deviation we don't support (non-f32 dtype,
+/// fortran order, version != 1.x).
+fn load_npy_f32(path: &str) -> (Vec<f32>, usize, usize) {
+    let bytes = std::fs::read(path).expect("read npy");
+    assert!(bytes.len() >= 10, "npy too short");
+    assert_eq!(&bytes[..6], b"\x93NUMPY", "not a numpy file");
+    let major = bytes[6];
+    let minor = bytes[7];
+    assert!(
+        major == 1 || major == 2,
+        "unsupported npy version {major}.{minor}",
+    );
+    let (header_len, header_start) = if major == 1 {
+        let hl = u16::from_le_bytes([bytes[8], bytes[9]]) as usize;
+        (hl, 10)
+    } else {
+        let hl = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]) as usize;
+        (hl, 12)
+    };
+    let header = std::str::from_utf8(&bytes[header_start..header_start + header_len])
+        .expect("npy header not utf-8");
+    // Header looks like: {'descr': '<f4', 'fortran_order': False, 'shape': (207695, 1024), }
+    assert!(header.contains("'descr': '<f4'"), "expected <f4 dtype");
+    assert!(
+        header.contains("'fortran_order': False"),
+        "expected C order",
+    );
+    let shape_start = header.find("'shape':").expect("no shape in header");
+    let after = &header[shape_start..];
+    let open = after.find('(').unwrap();
+    let close = after.find(')').unwrap();
+    let dims: Vec<usize> = after[open + 1..close]
+        .split(',')
+        .filter_map(|s| s.trim().parse::<usize>().ok())
+        .collect();
+    assert_eq!(dims.len(), 2, "expected 2-D array, got {} dims", dims.len());
+    let n = dims[0];
+    let dim = dims[1];
+    let data_start = header_start + header_len;
+    let n_floats = n * dim;
+    assert_eq!(
+        bytes.len() - data_start,
+        n_floats * 4,
+        "data length mismatch",
+    );
+    let mut out = vec![0.0f32; n_floats];
+    for (i, chunk) in bytes[data_start..].chunks_exact(4).enumerate() {
+        out[i] = f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+    }
+    (out, n, dim)
 }
 
 /// Sample a single standard-normal value.
@@ -432,11 +498,7 @@ fn print_json(rows: &[Row], cfg: &Config) {
 }
 
 fn main() {
-    let cfg = parse_args();
-    eprintln!(
-        "bench_rank: dim={} n={} queries={} k={}",
-        cfg.dim, cfg.n, cfg.n_queries, cfg.k,
-    );
+    let mut cfg = parse_args();
     if cfg.encode_threads_note {
         let threads = rayon::current_num_threads();
         eprintln!(
@@ -444,13 +506,45 @@ fn main() {
         );
     }
 
-    let t0 = Instant::now();
+    let (corpus, queries) = if let (Some(corpus_path), Some(queries_path)) =
+        (cfg.corpus_npy.clone(), cfg.queries_npy.clone())
+    {
+        eprintln!("loading corpus {} ...", corpus_path);
+        let t0 = Instant::now();
+        let (corpus, n, dim) = load_npy_f32(&corpus_path);
+        eprintln!("  loaded n={} dim={} in {:.2}s", n, dim, t0.elapsed().as_secs_f64());
+        eprintln!("loading queries {} ...", queries_path);
+        let t0 = Instant::now();
+        let (queries, n_q, q_dim) = load_npy_f32(&queries_path);
+        assert_eq!(q_dim, dim, "query dim {q_dim} != corpus dim {dim}");
+        let n_q_take = cfg.n_queries.min(n_q);
+        let queries: Vec<f32> = queries[..n_q_take * dim].to_vec();
+        eprintln!(
+            "  loaded n_q={} dim={} in {:.2}s (using first {} for the bench)",
+            n_q,
+            q_dim,
+            t0.elapsed().as_secs_f64(),
+            n_q_take,
+        );
+        cfg.dim = dim;
+        cfg.n = n;
+        cfg.n_queries = n_q_take;
+        (corpus, queries)
+    } else {
+        let t0 = Instant::now();
+        eprintln!(
+            "generating low-rank clustered corpus (clusters={}, latent={}) ...",
+            cfg.n_clusters, cfg.latent_dim,
+        );
+        let (corpus, queries, _q_clusters) = make_clustered_corpus(&cfg, 1);
+        eprintln!("  done in {:.2}s", t0.elapsed().as_secs_f64());
+        (corpus, queries)
+    };
+
     eprintln!(
-        "generating low-rank clustered corpus (clusters={}, latent={}) ...",
-        cfg.n_clusters, cfg.latent_dim,
+        "bench_rank: dim={} n={} queries={} k={}",
+        cfg.dim, cfg.n, cfg.n_queries, cfg.k,
     );
-    let (corpus, queries, _q_clusters) = make_clustered_corpus(&cfg, 1);
-    eprintln!("  done in {:.2}s", t0.elapsed().as_secs_f64());
 
     eprintln!("FP32 brute-force ground truth ...");
     let t0 = Instant::now();
