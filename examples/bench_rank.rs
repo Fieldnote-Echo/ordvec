@@ -497,6 +497,14 @@ fn bench_bitmap(
 /// Two-stage: bitmap candidate generator (top M by overlap) then
 /// exact RankQuant b=`bits` asymmetric rerank on the M candidates.
 /// One row per (bits, M) pair.
+///
+/// `exact_rq_top` is the precomputed exact-RankQuant top-`k` indices
+/// per query (length `nq * k`). When provided, the row's name is
+/// suffixed with the candidate-recall: the fraction of exact-RQ
+/// top-`k` doc IDs present in the bitmap's M-candidate set, averaged
+/// over queries. This is the *ANN probe quality* metric, distinct
+/// from the task R@10 (which compares against FP32 brute-force
+/// ground truth).
 fn bench_two_stage(
     corpus: &[f32],
     queries: &[f32],
@@ -505,6 +513,7 @@ fn bench_two_stage(
     bits: u8,
     m: usize,
     n_top: usize,
+    exact_rq_top: Option<&[i64]>,
 ) -> Row {
     let mut bitmap = BitmapIndex::new(cfg.dim, n_top);
     let mut rq = RankQuantIndex::new(cfg.dim, bits);
@@ -532,8 +541,33 @@ fn bench_two_stage(
     });
     let pred = collect_preds(queries, cfg.dim, cfg.n_queries, cfg.k, |q| two_stage(q));
     let recall = recall_at_k(&pred, truth, cfg.k);
+
+    // Candidate-recall metric: for each query, how many of the
+    // exact-RankQuant top-k indices are present in the bitmap's M-
+    // candidate set? Reports the ANN probe quality.
+    let cand_recall_label = if let Some(exact) = exact_rq_top {
+        use std::collections::HashSet;
+        let mut hits = 0usize;
+        let mut total = 0usize;
+        for qi in 0..cfg.n_queries {
+            let q = &queries[qi * cfg.dim..(qi + 1) * cfg.dim];
+            let cands = bitmap.top_m_candidates(q, m);
+            let cand_set: HashSet<i64> = cands.iter().map(|&i| i as i64).collect();
+            let exact_top: &[i64] = &exact[qi * cfg.k..(qi + 1) * cfg.k];
+            for &di in exact_top {
+                if di >= 0 && cand_set.contains(&di) {
+                    hits += 1;
+                }
+                total += 1;
+            }
+        }
+        let cr = hits as f32 / total.max(1) as f32;
+        format!(" CR={cr:.3}")
+    } else {
+        String::new()
+    };
     finalise_row(
-        format!("TwoStage b={bits} M={m}"),
+        format!("TwoStage b={bits} M={m}{cand_recall_label}"),
         bytes_per_vec,
         total_mib,
         encode_vps,
@@ -734,9 +768,29 @@ fn main() {
     let n_top = cfg.dim / 4;
     eprintln!("benching Bitmap (n_top={n_top}, b=2-equivalent) ...");
     all_rows.push(bench_bitmap(&corpus, &queries, &truth, &cfg, n_top));
+
+    // Precompute exact-RankQuant b=2 top-k per query so two-stage
+    // rows can report candidate-recall (ANN probe quality, distinct
+    // from task R@10).
+    eprintln!("computing exact RankQuant b=2 top-k for candidate-recall metric ...");
+    let mut rq_exact = RankQuantIndex::new(cfg.dim, 2);
+    rq_exact.add(&corpus);
+    let rq_top: Vec<i64> = collect_preds(&queries, cfg.dim, cfg.n_queries, cfg.k, |q| {
+        rq_exact.search_asymmetric(q, cfg.k).indices
+    });
+
     for &m in &[100usize, 500, 1000, 5000] {
         eprintln!("benching TwoStage b=2 M={m} ...");
-        all_rows.push(bench_two_stage(&corpus, &queries, &truth, &cfg, 2, m, n_top));
+        all_rows.push(bench_two_stage(
+            &corpus,
+            &queries,
+            &truth,
+            &cfg,
+            2,
+            m,
+            n_top,
+            Some(&rq_top),
+        ));
     }
 
     println!();

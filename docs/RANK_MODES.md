@@ -1,37 +1,55 @@
 # Rank-cosine index modes for turbovec
 
-**Real-data headline (Harrier arXiv embeddings, 207k docs, paraphrase
-queries, Ryzen 9 9950X):**
+**The first RankVec-native systems headline (Harrier arXiv, 207k docs,
+paraphrase queries, Ryzen 9 9950X, single-thread per query):**
 
-At matched 256 B/vec, RankQuant-2 asymmetric beats TurboQuant-2 by
-**+3.3 R@10** (0.764 vs 0.731). At matched 512 B/vec, TurboQuant-4
-beats RankQuant-4 asymmetric by **+5.2 R@10** (0.895 vs 0.843). Encode
-is **26-60× faster** for RankQuant across both.
+> RankQuant turns vectors into fixed-mass ordinal sets, so candidate
+> generation becomes bitmap overlap instead of low-bit dot product.
+> Magnitude quantizers don't have this primitive.
 
-After AVX-512 lowering with centre-drop, query latency on the same
-corpus is **within 1.5× of hand-tuned TurboQuant at 4-bit** and
-**within 2.5× at 2-bit**:
+| mode | p50 | R@10 | storage |
+|---|---:|---:|---:|
+| TurboQuant b=2 (FAISS-style AVX2 LUT) | 3.25 ms | 0.7305 | 256 B/vec |
+| TurboQuant b=4 (same)                  | 5.60 ms | 0.8945 | 512 B/vec |
+| RankQuant b=2 exact (AVX-512 4-way)    | 5.91 ms | 0.7635 | 256 B/vec |
+| RankQuant b=4 exact (AVX-512 4-way)    | 7.05 ms | 0.8430 | 512 B/vec |
+| Bitmap probe only (n_top = 256)        | 0.42 ms | 0.4495 | 128 B/vec |
+| **TwoStage b=2, M=100**                | **0.47 ms** | **0.7310** | 384 B/vec |
+| **TwoStage b=2, M=500**                | **1.18 ms** | **0.7590** | 384 B/vec |
+| TwoStage b=2, M=1000                    | 3.03 ms | 0.7620 | 384 B/vec |
 
-| bits | TurboQuant p50 | RankQuant AVX-512 p50 | gap  | Mdocs/s scan |
-|------|---------------:|----------------------:|-----:|-------------:|
-| 2    | 3.17 ms        | **7.99 ms**           | 2.5× | 26.0         |
-| 4    | 5.84 ms        | **9.01 ms**           | 1.5× | 23.1         |
+Three rows that tell the story:
 
-Optimisation chain (b=2 asym p50 on Harrier 207k):
+- **At M=100, the rank-native two-stage matches TurboQuant b=2's
+  recall at 6.9× lower latency** (0.47 ms vs 3.25 ms). Storage
+  is 384 B/vec (256 RankQuant + 128 bitmap) vs TurboQuant's 256.
+- **At M=500, two-stage beats TurboQuant b=2's recall by +2.9 R@10
+  while running 2.8× faster** (1.18 ms vs 3.25 ms, 0.7590 vs 0.7305).
+  This is the killer row.
+- Bitmap-only at 0.42 ms / R@10 = 0.45 is the coarse probe — not the
+  final scorer, but the candidate generator that makes two-stage cheap.
+
+Encode is **26-60× faster** for RankQuant across both bit widths,
+and the entire two-stage path uses zero training, zero rotation, zero
+codebook — the structural prior is what's doing the work.
+
+## Optimisation chain (b=2 asym p50 on Harrier 207k)
 
 ```
 scalar LUT                78.9 ms
-+ AVX2 inline-expand      10.2 ms   (7.7× lift; replaces per-coord LUT with broadcast-shift-mask-cvt-FMA)
-+ centre-drop              9.19 ms  (1.1× lift; raw codes in hot loop, constant added at finalize)
-+ AVX-512                  7.99 ms  (1.15× lift; 16-wide FMA, single __m512 per chunk)
++ AVX2 inline-expand      10.2 ms   (7.7×; replaces per-coord LUT with broadcast-shift-mask-cvt-FMA)
++ centre-drop              9.19 ms  (1.1×; raw codes in hot loop, constant added at finalize)
++ AVX-512 single-acc       7.99 ms  (1.15×; 16-wide FMA, single __m512 per chunk)
++ AVX-512 4-way multi-acc  6.21 ms  (1.29×; break the FMA dep chain across 4 accumulators)
++ Bitmap → RQ rerank M=500 1.18 ms  (5.3×; constant-composition candidate prior + exact subset rerank)
 ```
 
 Centre-drop math: because centred bucket scores differ from raw-code
 scores only by a query-constant offset (under the
 `dim % (1 << bits) == 0` constraint that fixes every doc's bucket
 histogram), the asymmetric kernel can score raw bucket IDs directly
-for ranking. The offset is re-applied to the top-k scores at
-finalize so the displayed cosines stay exact.
+for ranking. The offset is re-applied to the top-k scores at finalize
+so the displayed cosines stay exact.
 
 > Branch: `nelson/rank-modes`. Status: v1.1 prototype, AVX-512 scan
 > for the asymmetric path with a scalar LUT fallback. Numbers below
