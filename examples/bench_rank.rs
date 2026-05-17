@@ -547,10 +547,32 @@ fn print_json(rows: &[Row], cfg: &Config) {
 
 fn main() {
     let mut cfg = parse_args();
+
+    // Bench environment capture — exposes the CPU features the kernels
+    // actually compile against, the rayon thread pool, and rust-version
+    // so a published table is reproducible.
+    eprintln!(
+        "target arch {} / opt-level 3 + lto (release profile)",
+        std::env::consts::ARCH,
+    );
+    #[cfg(target_arch = "x86_64")]
+    {
+        let feats = [
+            ("sse4.2", is_x86_feature_detected!("sse4.2")),
+            ("avx2", is_x86_feature_detected!("avx2")),
+            ("fma", is_x86_feature_detected!("fma")),
+            ("avx512f", is_x86_feature_detected!("avx512f")),
+            ("avx512bw", is_x86_feature_detected!("avx512bw")),
+            ("avx512vl", is_x86_feature_detected!("avx512vl")),
+        ];
+        let on: Vec<&str> = feats.iter().filter(|(_, v)| *v).map(|(n, _)| *n).collect();
+        eprintln!("x86_64 features detected: {}", on.join(", "));
+    }
     if cfg.encode_threads_note {
         let threads = rayon::current_num_threads();
         eprintln!(
-            "rayon threads = {threads} (encode + brute-force GT are parallelised)",
+            "rayon threads = {threads} (encode + brute-force GT are parallelised; \
+             per-query latency rows measure single-thread scan)",
         );
     }
 
