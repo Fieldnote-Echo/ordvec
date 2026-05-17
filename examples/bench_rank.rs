@@ -42,6 +42,12 @@ struct Config {
     /// where doc_ids of length k; -1 entries are sentinels for modes
     /// that cannot return k candidates (e.g. two-stage with M < k).
     dump_top_k_jsonl: Option<String>,
+    /// Optional mode filter. When set, only rows whose row.name
+    /// matches one of these tags are included. Supported tags:
+    /// "bitmap" (default hand-rolled bitmap scan), "bitmap-pulp"
+    /// (feature-gated pulp prototype, only with --features pulp-kernel).
+    /// Unset = run the full bench suite.
+    mode: Option<String>,
 }
 
 fn parse_args() -> Config {
@@ -56,6 +62,7 @@ fn parse_args() -> Config {
         corpus_npy: None,
         queries_npy: None,
         dump_top_k_jsonl: None,
+        mode: None,
     };
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
@@ -69,6 +76,7 @@ fn parse_args() -> Config {
             "--corpus-npy" => cfg.corpus_npy = Some(args.next().unwrap()),
             "--queries-npy" => cfg.queries_npy = Some(args.next().unwrap()),
             "--dump-top-k-jsonl" => cfg.dump_top_k_jsonl = Some(args.next().unwrap()),
+            "--mode" => cfg.mode = Some(args.next().unwrap()),
             other => panic!("unknown arg {other}"),
         }
     }
@@ -899,6 +907,42 @@ fn main() {
     eprintln!("  done in {:.2}s", t0.elapsed().as_secs_f64());
 
     let mut all_rows = Vec::new();
+
+    // --mode filter: when set, run only the selected micro-bench so an
+    // experiment isolates one kernel without the 20+ row default suite.
+    if let Some(mode) = cfg.mode.clone() {
+        let n_top = cfg.dim / 4;
+        match mode.as_str() {
+            "bitmap" => {
+                eprintln!("benching Bitmap (n_top={n_top}, b=2-equivalent) ...");
+                all_rows.push(bench_bitmap(&corpus, &queries, &truth, &cfg, n_top));
+            }
+            "bitmap-pulp" => {
+                // The pulp kernel is selected at compile time via the
+                // `pulp-kernel` feature; with the feature off this is
+                // identical to --mode bitmap (the search() dispatch falls
+                // through to the hand-rolled scan). We still surface the
+                // row so the bench output makes the configuration explicit.
+                #[cfg(feature = "pulp-kernel")]
+                eprintln!("benching Bitmap-pulp (n_top={n_top}) ...");
+                #[cfg(not(feature = "pulp-kernel"))]
+                eprintln!(
+                    "WARN: --mode bitmap-pulp requested but built without \
+                     --features pulp-kernel; falling back to hand-rolled scan",
+                );
+                let mut row = bench_bitmap(&corpus, &queries, &truth, &cfg, n_top);
+                // Tag the row name so a comparison run is unambiguous.
+                row.name = format!("Bitmap-pulp n_top={n_top}");
+                all_rows.push(row);
+            }
+            other => panic!("unknown --mode '{other}' (expected: bitmap, bitmap-pulp)"),
+        }
+        println!();
+        print_table(&all_rows);
+        println!();
+        print_json(&all_rows, &cfg);
+        return;
+    }
 
     eprintln!("benching TurboQuant b=2 ...");
     all_rows.push(bench_turboquant(&corpus, &queries, &truth, &cfg, 2));
