@@ -7,27 +7,37 @@ paraphrase queries, Ryzen 9 9950X, single-thread per query):**
 > generation becomes bitmap overlap instead of low-bit dot product.
 > Magnitude quantizers don't have this primitive.
 
-| mode | p50 | R@10 | storage |
-|---|---:|---:|---:|
-| TurboQuant b=2 (FAISS-style AVX2 LUT) | 3.25 ms | 0.7305 | 256 B/vec |
-| TurboQuant b=4 (same)                  | 5.60 ms | 0.8945 | 512 B/vec |
-| RankQuant b=2 exact (AVX-512 4-way)    | 5.91 ms | 0.7635 | 256 B/vec |
-| RankQuant b=4 exact (AVX-512 4-way)    | 7.05 ms | 0.8430 | 512 B/vec |
-| Bitmap probe only (n_top = 256)        | 0.42 ms | 0.4495 | 128 B/vec |
-| **TwoStage b=2, M=100**                | **0.47 ms** | **0.7310** | 384 B/vec |
-| **TwoStage b=2, M=500**                | **1.18 ms** | **0.7590** | 384 B/vec |
-| TwoStage b=2, M=1000                    | 3.03 ms | 0.7620 | 384 B/vec |
+| mode | p50 | R@10 | storage | CR |
+|---|---:|---:|---:|---:|
+| TurboQuant b=2 (FAISS-style AVX2 LUT) | 3.36 ms | 0.7305 | 256 B/vec | — |
+| TurboQuant b=4 (same)                  | 5.64 ms | 0.8945 | 512 B/vec | — |
+| RankQuant b=2 exact (AVX-512 4-way)    | 6.20 ms | 0.7635 | 256 B/vec | — |
+| RankQuant b=4 exact (AVX-512 4-way)    | 7.08 ms | 0.8430 | 512 B/vec | — |
+| Bitmap probe only (n_top = 256)        | 0.42 ms | 0.4495 | 128 B/vec | — |
+| **TwoStage b=2, M=100**                | **0.53 ms** | **0.7280** | 384 B/vec | **0.905** |
+| **TwoStage b=2, M=500**                | **0.60 ms** | **0.7585** | 384 B/vec | **0.986** |
+| TwoStage b=2, M=1000                    | 0.63 ms | 0.7620 | 384 B/vec | 0.996 |
+| **TwoStage b=2, M=5000**                | **0.85 ms** | **0.7635** | 384 B/vec | **1.000** |
 
-Three rows that tell the story:
+`CR` = *candidate recall* = fraction of exact-RankQuant-b=2 top-10
+indices present in the bitmap's M-candidate set, averaged over
+queries. Distinct from task R@10 (which is against FP32 brute-force
+cosine ground truth).
 
-- **At M=100, the rank-native two-stage matches TurboQuant b=2's
-  recall at 6.9× lower latency** (0.47 ms vs 3.25 ms). Storage
-  is 384 B/vec (256 RankQuant + 128 bitmap) vs TurboQuant's 256.
-- **At M=500, two-stage beats TurboQuant b=2's recall by +2.9 R@10
-  while running 2.8× faster** (1.18 ms vs 3.25 ms, 0.7590 vs 0.7305).
-  This is the killer row.
+Four rows that tell the story:
+
+- **At M=100, two-stage matches TurboQuant b=2's recall at 6.3× lower
+  latency** (0.53 ms vs 3.36 ms; 0.7280 vs 0.7305). Storage is
+  384 B/vec (256 RankQuant + 128 bitmap) vs TurboQuant's 256.
+- **At M=500, two-stage beats TurboQuant b=2 by +2.8 R@10 at 5.6×
+  lower latency** (0.60 ms vs 3.36 ms, 0.7585 vs 0.7305).
+- **At M=5000, two-stage recovers the full exact-RankQuant R@10
+  (0.7635) at 3.9× lower latency than TurboQuant b=2** (0.85 ms vs
+  3.36 ms). The bitmap probe captures 100% of the exact top-10 at
+  this M, so the rerank reproduces the exact result.
 - Bitmap-only at 0.42 ms / R@10 = 0.45 is the coarse probe — not the
-  final scorer, but the candidate generator that makes two-stage cheap.
+  final scorer, but the candidate generator that makes two-stage
+  fast at every M.
 
 Encode is **26-60× faster** for RankQuant across both bit widths,
 and the entire two-stage path uses zero training, zero rotation, zero
@@ -41,7 +51,8 @@ scalar LUT                78.9 ms
 + centre-drop              9.19 ms  (1.1×; raw codes in hot loop, constant added at finalize)
 + AVX-512 single-acc       7.99 ms  (1.15×; 16-wide FMA, single __m512 per chunk)
 + AVX-512 4-way multi-acc  6.21 ms  (1.29×; break the FMA dep chain across 4 accumulators)
-+ Bitmap → RQ rerank M=500 1.18 ms  (5.3×; constant-composition candidate prior + exact subset rerank)
++ Bitmap → RQ rerank M=500 0.60 ms  (10.3×; constant-composition candidate prior + exact subset rerank)
++ Bitmap → RQ rerank M=5000 0.85 ms (exact RankQuant R@10 recovered at 7.3× lower latency)
 ```
 
 Centre-drop math: because centred bucket scores differ from raw-code
@@ -93,6 +104,62 @@ training, no per-document norms (the L2 norm of a permutation of
 `{0..D-1}` is analytical). Encode is a single `argsort` pass per
 vector, with the option to bucket and pack into `B` bits per
 coordinate.
+
+## Why this works: combinatorics, not geometry
+
+The bitmap two-stage result is not merely a faster scoring kernel —
+it is a structural primitive that magnitude-preserving quantization
+does not expose. Three properties chain together:
+
+**1. RankQuant is a constant-composition code.** The rank transform
+is a permutation of `{0, ..., D-1}`, so under the equal-width bucket
+partition every document assigns *exactly the same number of
+coordinates to each bucket*: `D / 2^B` coordinates per bucket, for
+all docs. For `D=1024, B=2` that is 256 coordinates in the top
+bucket of every document.
+
+**2. The similarity score decomposes over bucket-overlap counts.**
+Let `Q_a` be the set of query coordinates in bucket `a`, and `D_b`
+the analogous set for the document. Then asymmetric rank-cosine
+re-expresses (up to per-query constants) as a weighted contingency
+table of bucket-overlap counts:
+
+```
+score(q, d) = Σ_{a,b} w(a, b) · |Q_a ∩ D_b|
+```
+
+So RankQuant similarity is a bilinear function of bucket-overlap
+counts between two constant-composition partitions, not a dot
+product over magnitudes.
+
+**3. The simplest truncation — top-bucket overlap — has a closed-form
+null distribution.** For uniformly random fixed-size subsets,
+`X = |Q_top ∩ D_top|` is hypergeometric `H(D, n_top, n_top)` with
+`E[X] = n_top² / D`. For `D=1024, n_top=256` the expected overlap
+under the null is exactly **64**. Observed overlaps significantly
+above 64 are evidence of shared coordinate salience, with
+closed-form p-values from the hypergeometric distribution.
+
+This is what makes the bitmap probe a principled candidate
+generator rather than a tunable heuristic. Magnitude quantizers
+don't have a hypergeometric null because they don't have fixed
+bucket cardinalities — their score distribution depends on the
+unknown embedding distribution.
+
+**A research program this suggests.** The chain — representation →
+statistic → retrieval theorem → systems implementation — has a
+plausible formal target. Under a shared-latent-support model where
+relevant documents have elevated coordinates on a query-specific
+support set `S_q`, the top-bucket overlap statistic is monotone in
+the likelihood ratio for relevance, suggesting that bitmap probing
+is approximately Bayes-optimal in that regime. We do not claim that
+theorem here; this section flags it as the natural mathematical
+direction for the empirical result in the table above.
+
+The systems consequence is what the bench measures: at M=500 the
+bitmap probe captures 98.5% of exact RankQuant's top-10 neighbours,
+and the rerank R@10 (0.759) is within 0.5 R@10 of the exact RankQuant
+baseline (0.7635) — at 2.8× lower latency than TurboQuant b=2.
 
 ## Headline numbers (real data — Harrier arXiv)
 
