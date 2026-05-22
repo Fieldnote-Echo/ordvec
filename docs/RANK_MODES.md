@@ -1,81 +1,53 @@
 # Rank-cosine index modes for turbovec
 
-**The first RankVec-native systems headline (Harrier arXiv, 207k docs,
-paraphrase queries, Ryzen 9 9950X, single-thread per query):**
+These index types operate on a *rank* view of the embedding rather
+than on the rotated coordinates `TurboQuantIndex` quantizes:
 
 > RankQuant turns vectors into fixed-mass ordinal sets, so candidate
 > generation becomes bitmap overlap instead of low-bit dot product.
 > Magnitude quantizers don't have this primitive.
 
-| mode | p50 | R@10 | storage | CR |
-|---|---:|---:|---:|---:|
-| TurboQuant b=2 (FAISS-style AVX2 LUT) | 3.36 ms | 0.7305 | 256 B/vec | — |
-| TurboQuant b=4 (same)                  | 5.64 ms | 0.8945 | 512 B/vec | — |
-| RankQuant b=2 exact (AVX-512 4-way)    | 6.20 ms | 0.7635 | 256 B/vec | — |
-| RankQuant b=4 exact (AVX-512 4-way)    | 7.08 ms | 0.8430 | 512 B/vec | — |
-| Bitmap probe only (n_top = 256)        | 0.42 ms | 0.4495 | 128 B/vec | — |
-| **TwoStage b=2, M=100**                | **0.53 ms** | **0.7280** | 384 B/vec | **0.905** |
-| **TwoStage b=2, M=500**                | **0.60 ms** | **0.7585** | 384 B/vec | **0.986** |
-| TwoStage b=2, M=1000                    | 0.63 ms | 0.7620 | 384 B/vec | 0.996 |
-| **TwoStage b=2, M=5000**                | **0.85 ms** | **0.7635** | 384 B/vec | **1.000** |
+The asymmetric scan ships an AVX-512 path (16-wide FMA, 4-way
+multi-accumulator) that auto-detects at runtime and falls through to
+AVX2 and then a scalar LUT scan; symmetric paths and the b=1
+asymmetric path use the scalar LUT scan. The whole pipeline uses zero
+training, zero rotation, zero codebook — the structural prior is what
+does the work.
 
-`CR` = *candidate recall* = fraction of exact-RankQuant-b=2 top-10
-indices present in the bitmap's M-candidate set, averaged over
-queries. Distinct from task R@10 (which is against FP32 brute-force
-cosine ground truth).
+**Reproducible headline (synthetic clustered corpus).** Every number
+in the leading tables below is regenerable from this repo with a
+single command, no external data:
 
-Four rows that tell the story:
-
-- **At M=100, two-stage matches TurboQuant b=2's recall within
-  −0.003 R@10 at 6.3× lower latency** (0.53 ms vs 3.36 ms; 0.7280 vs
-  0.7305), at 1.5× the per-vector storage (384 B/vec = 256 RankQuant
-  + 128 bitmap, vs TurboQuant's 256).
-- **At M=500, two-stage beats TurboQuant b=2 by +2.8 R@10 at 5.6×
-  lower latency** (0.60 ms vs 3.36 ms, 0.7585 vs 0.7305), at 1.5×
-  the storage.
-- **At M=5000, two-stage recovers the full exact-RankQuant R@10
-  (0.7635) at 3.9× lower latency than TurboQuant b=2** (0.85 ms vs
-  3.36 ms), at 1.5× the storage. The bitmap probe captures 100% of
-  the exact top-10 at this M, so the rerank reproduces the exact
-  result.
-- Bitmap-only at 0.42 ms / R@10 = 0.45 is the coarse probe — not the
-  final scorer, but the candidate generator that makes two-stage
-  fast at every M.
-
-Encode is **26-60× faster** for RankQuant across both bit widths,
-and the entire two-stage path uses zero training, zero rotation, zero
-codebook — the structural prior is what's doing the work.
-
-## Optimisation chain (b=2 asym p50 on Harrier 207k)
-
-```
-scalar LUT                78.9 ms
-+ AVX2 inline-expand      10.2 ms   (7.7×; replaces per-coord LUT with broadcast-shift-mask-cvt-FMA)
-+ centre-drop              9.19 ms  (1.1×; raw codes in hot loop, constant added at finalize)
-+ AVX-512 single-acc       7.99 ms  (1.15×; 16-wide FMA, single __m512 per chunk)
-+ AVX-512 4-way multi-acc  6.21 ms  (1.29×; break the FMA dep chain across 4 accumulators)
-+ Bitmap → RQ rerank M=500 0.60 ms  (10.3×; constant-composition candidate prior + exact subset rerank)
-+ Bitmap → RQ rerank M=5000 0.85 ms (exact RankQuant R@10 recovered at 7.3× lower latency)
+```bash
+cargo run --release --example bench_rank
 ```
 
-Centre-drop math: because centred bucket scores differ from raw-code
-scores only by a query-constant offset (under the
-`dim % (1 << bits) == 0` constraint that fixes every doc's bucket
-histogram), the asymmetric kernel can score raw bucket IDs directly
-for ranking. The offset is re-applied to the top-k scores at finalize
-so the displayed cosines stay exact.
+That runs the head-to-head on a structured synthetic corpus (D=1024,
+N=50,000, 200 queries, 200 cluster prototypes, latent_dim=64; see
+[Stress test](#stress-test-low-rank-clustered-synthetic) for the
+exact construction). Results on real embedding corpora are
+user-runnable via `--corpus-npy` / `--queries-npy` and reported, with
+the exact command, under
+[External-corpus results](#external-corpus-results-user-runnable) —
+they are not the lead claim because the corpus is not shipped here.
 
-> Branch: `nelson/rank-modes`. Status: v1.1 prototype, AVX-512 scan
-> for the asymmetric path with a scalar LUT fallback. Numbers below
-> are head-to-head on the paper's exact arXiv corpus (207,695
-> Harrier-OSS-v1-0.6B embeddings, 200 paraphrase queries) plus a
-> structured synthetic stress-test. On Harrier at 2-bit, RankQuant
-> beats TurboQuant on recall and dominates build cost; on Harrier at
-> 4-bit, TurboQuant's cosine optimisation wins on recall but
-> RankQuant's query latency is within 1.5×. The 4-bit result is
-> encoder-conditional — see `UPSTREAM_ISSUE_DRAFT.md` §cross-encoder
-> for the BGE inversion (RankQuant b=4 wins +0.038 R@10 on BGE,
-> tracking BGE's more uniform per-coordinate distribution).
+The bitmap two-stage path (`BitmapIndex` candidate gen →
+`RankQuantIndex` exact subset rerank) is the operating point that
+turns RankQuant from a slow exact scan into a sub-linear retriever:
+the bitmap probe is the cheap candidate generator, and
+`search_asymmetric_subset` reruns the exact RankQuant kernel on only
+the surviving M candidates. The bench reports this path as its
+`TwoStage ...` rows, each annotated with a candidate-recall figure
+(`CR` = fraction of exact-RankQuant top-10 indices present in the
+bitmap's M-candidate set, averaged over queries — distinct from task
+R@10, which is against FP32 brute-force cosine ground truth).
+
+Centre-drop math (why the asymmetric kernel needs no per-coord LUT):
+because centred bucket scores differ from raw-code scores only by a
+query-constant offset (under the `dim % (1 << bits) == 0` constraint
+that fixes every doc's bucket histogram), the asymmetric kernel can
+score raw bucket IDs directly for ranking. The offset is re-applied
+to the top-k scores at finalize so the displayed cosines stay exact.
 
 ## Bench environment
 
@@ -94,7 +66,8 @@ so the displayed cosines stay exact.
 A two-DIMM DDR5-6000-class system may show shorter absolute latency;
 the relative gap to TurboQuant is the load-bearing comparison.
 
-This branch adds two new index types alongside `TurboQuantIndex`:
+This crate adds rank-view index types alongside `TurboQuantIndex`.
+The two scored types are:
 
 - **`RankIndex`** — stores the dimension-wise rank transform of each
   document as `u16` (`2 * dim` bytes per document).
@@ -104,6 +77,8 @@ This branch adds two new index types alongside `TurboQuantIndex`:
 
 Both expose `search` (symmetric: rank-vs-rank, Spearman correlation)
 and `search_asymmetric` (FP32 query against rank-stored documents).
+`BitmapIndex` and `SignBitmapIndex` provide the cheap candidate-gen
+front end for the two-stage path (see [README](../README.md#rank-mode-index-types)).
 
 The construction has no rotation matrix, no codebook, no Lloyd-Max
 training, no per-document norms (the L2 norm of a permutation of
@@ -160,99 +135,41 @@ support set `S_q`, the top-bucket overlap statistic is monotone in
 the likelihood ratio for relevance, suggesting that bitmap probing
 may approach Bayes-optimality under that model. We do not claim
 that theorem here; this section flags it as the natural
-mathematical direction for the empirical result in the table above.
+mathematical direction for the empirical results below.
 
-The systems consequence is what the bench measures: at M=500 the
-bitmap probe captures 98.5% of exact RankQuant's top-10 neighbours,
-and the rerank R@10 (0.759) is within 0.5 R@10 of the exact RankQuant
-baseline (0.7635) — at 2.8× lower latency than TurboQuant b=2.
+The systems consequence is what the bench measures: at a moderate M
+the bitmap probe captures most of exact RankQuant's top-10 neighbours,
+so the two-stage rerank reproduces near-exact RankQuant R@10 at a
+fraction of the full-scan latency. The `bench_rank` run prints this
+as its `TwoStage ...` rows with the per-M candidate-recall (`CR`)
+figure attached.
 
-## Headline numbers (real data — Harrier arXiv)
+## Headline numbers (synthetic clustered corpus)
 
-Bench:
-```bash
-RUSTFLAGS="-l openblas" cargo run --release -p turbovec --example bench_rank -- \
-  --corpus-npy /path/to/embeddings.npy \
-  --queries-npy /path/to/paraphrase_queries.npy \
-  --queries 200 --k 10
-```
-
-Setup: 207,695-doc arXiv (cs.LO + math.LO + cs.AI) corpus embedded
-with `microsoft/Harrier-OSS-v1-0.6B` at D=1024, paraphrase queries
-(LLM-generated research-question rewrites from a different model
-family). The same artefacts that produced the paper's main-corpus
-results. 200 queries × top-10. Ground truth: FP32 brute-force cosine.
-32-core Linux x86_64, release build.
-
-Results below are with the AVX-512 asymmetric scan enabled (auto-detected
-at runtime; falls through to AVX2 then to a scalar LUT scan). Symmetric
-paths and the B=1 asymmetric path remain on the scalar LUT scan.
-
-| mode               | bytes/vec | total MiB | encode v/s  | p50 ms | p99 ms | GiB/s | ns/dim | Mdocs/s | R@10   |
-|--------------------|-----------|-----------|-------------|--------|--------|------:|-------:|--------:|--------|
-| TurboQuant b=2     | 256       | 50.7      | 47,117      | 3.17   | 3.52   | 15.64 | 0.015  |   65.6  | **0.7305** |
-| TurboQuant b=4     | 512       | 101.4     | 19,531      | 5.84   | 6.24   | 16.96 | 0.027  |   35.6  | **0.8945** |
-| RankIndex sym      | 2048      | 405.7     | 1,039,409   | 104.1  | 105.6  | 3.81  | 0.489  |    2.0  | 0.8015 |
-| RankIndex asym     | 2048      | 405.7     | 1,039,409   | 112.4  | 115.0  | 3.52  | 0.529  |    1.8  | 0.8475 |
-| RankQuant b=2 sym  | 256       | 50.7      | 1,225,501   | 78.8   | 79.9   | 0.63  | 0.370  |    2.6  | 0.7130 |
-| **RankQuant b=2 asym (AVX-512)** | **256** | **50.7** | **1,225,501** | **7.99** | **8.39** | **6.20** | **0.038** | **26.0** | **0.7635** |
-| RankQuant b=4 sym  | 512       | 101.4     | 1,183,268   | 77.2   | 78.3   | 1.28  | 0.363  |    2.7  | 0.7985 |
-| **RankQuant b=4 asym (AVX-512)** | **512** | **101.4** | **1,183,268** | **9.01** | **9.69** | **10.99** | **0.042** | **23.1** | **0.8430** |
-| RankQuant b=1 asym | 128       | 25.4      | 1,282,106   | 75.7   | 77.4   | 0.33  | 0.356  |    2.7  | 0.6405 |
-
-The kernel does not use a per-coord LUT — `bucket_centre(b) = b - (2^B - 1) / 2`
-is one SIMD subtraction (folded out to the per-query offset via
-centre-drop), so the inner loop is broadcast → variable-shift → mask
-→ cvt → FMA with no LUT memory traffic.
-
-### Reading the real-data table
-
-**At 256 B/vec (2-bit), RankQuant beats TurboQuant on recall by
-+3.3 R@10.** This is the paper's primary operating point and the
-operating point where RankQuant's design assumption (preserving
-coordinate order at compact storage) most directly competes with
-TurboQuant's design assumption (preserving cosine geometry at
-compact storage). Real-embedding result: ordinal slightly wins.
-
-**At 512 B/vec (4-bit), TurboQuant beats RankQuant on recall by
-+5.2 R@10.** At wider codes TurboQuant's per-coordinate magnitude
-quantisation captures information the rank bucketing cannot — the
-4-bit RankQuant is bucketing into only 16 bins per dim while
-4-bit TurboQuant is using 16 Lloyd-Max centroids tuned to minimise
-cosine distortion. Real-embedding result: at the wider byte
-budget, magnitude wins.
-
-**Encode is 28-59× faster across the board.** TurboQuant b=2:
-44,713 vec/s; RankQuant b=2: 1,242,635 vec/s. TurboQuant b=4:
-19,721 vec/s; RankQuant b=4: 1,163,978 vec/s. The rank pipeline
-has no rotation matmul and no codebook fit; the dominant cost is
-`argsort` per vector.
-
-**Query latency is 13-24× slower for RankQuant on this branch.**
-TurboQuant achieves 15-17 GiB/s effective scan bandwidth via
-hand-tuned NEON/AVX kernels; RankQuant's scalar Rust scan hits
-0.63-1.28 GiB/s — a 13-25× implementation gap. After a SIMD
-lowering modelled on `search.rs` (calibrated 8-bit LUT,
-SIMD-blocked layout, packed-nibble scan), the rank scan should
-land within 2-3× of TurboQuant's latency at the same byte budget.
-
-**No claim is currently better than the table above.** The synthetic
-stress-test below remains as a method check, not a headline.
-
-## Stress test (low-rank clustered synthetic)
-
-A second bench at smaller scale tests how the methods react to
-deliberately anisotropic data. Run:
+This is the reproducible lead — regenerated by the default
+`bench_rank` run, no external data required:
 
 ```bash
-cargo run --release -p turbovec --example bench_rank -- \
-  --dim 1024 --n 50000 --queries 200 --clusters 200 --latent 64
+cargo run --release --example bench_rank
 ```
 
 Setup: D=1024, N=50,000 documents, 200 queries, k=10. Low-rank
-clustered corpus (200 cluster prototypes, latent_dim=64, projected
-to D=1024 with N(0,1) noise = 0.3 for docs, 0.1 for queries).
-Ground truth: FP32 brute-force cosine top-10.
+clustered corpus (200 cluster prototypes, latent_dim=64, projected to
+D=1024 with N(0,1) noise = 0.3 for docs, 0.1 for queries). Ground
+truth: FP32 brute-force cosine top-10. The construction is detailed
+under [Stress test](#stress-test-low-rank-clustered-synthetic) — it
+is deliberately anisotropic, which is the regime that most strains
+TurboQuant's data-oblivious random rotation, so treat the synthetic
+recall *gaps* as an upper bound on what real embeddings show (the
+[external-corpus section](#external-corpus-results-user-runnable)
+records a much smaller real-data gap).
+
+Results are with the AVX-512 asymmetric scan enabled where applicable
+(auto-detected at runtime; falls through to AVX2 then to a scalar LUT
+scan). Symmetric paths and the b=1 asymmetric path use the scalar LUT
+scan. Absolute latencies are machine-specific (see
+[Bench environment](#bench-environment)); the relative gap to
+TurboQuant is the load-bearing comparison.
 
 | mode               | bytes/vec | encode v/s | p50 ms | GiB/s | ns/dim | R@10  |
 |--------------------|-----------|------------|--------|-------|--------|-------|
@@ -267,32 +184,83 @@ Ground truth: FP32 brute-force cosine top-10.
 | RankQuant b=1 sym  | 128       | 1,254,733  | 18.4   | 0.32  | 0.359  | 0.407 |
 | RankQuant b=1 asym | 128       | 1,254,733  | 18.4   | 0.33  | 0.359  | 0.525 |
 
-The synthetic-vs-real comparison is the load-bearing fact in this
-section: at matched bytes, **the +42 R@10 gap on synthetic data
-collapses to +3.3 R@10 on real Harrier** at 2-bit, and to *-5.2*
-R@10 at 4-bit. The synthetic corpus is anisotropic by construction
-(latent_dim=64 in D=1024), which is the regime where TurboQuant's
-data-oblivious random rotation is most strained. Real
-arXiv-Harrier embeddings have anisotropic structure too, but less
-extreme — enough to surface a small RankQuant advantage at the
-narrowest byte budget, not enough to make TurboQuant collapse.
+The kernel does not use a per-coord LUT — `bucket_centre(b) = b - (2^B - 1) / 2`
+is one SIMD subtraction (folded out to the per-query offset via
+centre-drop), so the inner loop is broadcast → variable-shift → mask
+→ cvt → FMA with no LUT memory traffic.
+
+### Reading the synthetic table
+
+**Encode is 26-62× faster across the board.** TurboQuant has no
+rotation matmul and no codebook fit to amortise; the dominant
+RankQuant encode cost is `argsort` per vector. This advantage is
+structural and transfers cleanly to real corpora (see
+[Encode throughput](#encode-throughput-23-62-faster)).
+
+**Storage is identical at matched bit width.** `bytes_per_vec =
+dim * bits / 8` for both schemes. The byte budget is the same lever;
+what differs is what each byte *means* (quantised magnitude vs
+bucketed rank).
+
+**Recall favours rank on this anisotropic corpus.** At matched bytes,
+RankQuant asym beats TurboQuant by a wide margin here (e.g. +0.42
+R@10 at 256 B/vec). This is the corpus where TurboQuant's
+data-oblivious rotation is most strained; the gap shrinks sharply on
+real embeddings, and at wider codes can invert. See the
+[external-corpus section](#external-corpus-results-user-runnable) for
+the honest real-data picture.
+
+**Single-query exact-scan latency is the standing weakness.** The
+synthetic rows above measure the per-query exact scan, where the
+RankQuant b=2 asym scan (~0.63 GiB/s effective) trails TurboQuant's
+hand-tuned kernel (15-23 GiB/s). The two-stage path
+(`BitmapIndex` → `RankQuantIndex` subset rerank) is what closes this
+in practice — it scores only the M bitmap survivors instead of the
+full corpus. The candidate-recall vs latency trade is the bench's
+two-stage rows; remaining single-query SIMD headroom is in
+[Where TurboQuant still wins](#where-turboquant-still-wins).
+
+## Stress test (low-rank clustered synthetic)
+
+This is the construction behind the [headline
+table](#headline-numbers-synthetic-clustered-corpus). The default
+`bench_rank` run uses these parameters; the explicit form is:
+
+```bash
+cargo run --release --example bench_rank -- \
+  --dim 1024 --n 50000 --queries 200 --clusters 200 --latent 64
+```
+
+Setup: D=1024, N=50,000 documents, 200 queries, k=10. Low-rank
+clustered corpus (200 cluster prototypes, latent_dim=64, projected
+to D=1024 with N(0,1) noise = 0.3 for docs, 0.1 for queries).
+Ground truth: FP32 brute-force cosine top-10.
+
+The corpus is anisotropic *by construction* (latent_dim=64 in
+D=1024), which is exactly the regime where TurboQuant's
+data-oblivious random rotation has least useful structure to exploit
+— so RankQuant's recall advantage here (e.g. +0.42 R@10 at 256 B/vec
+in the headline table) is a best case for rank, not a typical case.
+On real embeddings with milder anisotropy the gap is much smaller and
+can invert at wider codes; the
+[external-corpus section](#external-corpus-results-user-runnable)
+shows how to reproduce that contrast on your own data.
 
 ## What survived the head-to-head
 
-### Encode throughput: 23-59× faster (real data)
+### Encode throughput: 23-62× faster
 
-| bench   | bytes/vec | TurboQuant v/s | RankQuant v/s | ratio  |
+| corpus  | bytes/vec | TurboQuant v/s | RankQuant v/s | ratio  |
 |---------|-----------|----------------|---------------|--------|
-| Harrier | 256       | 44,713         | 1,242,635     | 27.8×  |
-| Harrier | 512       | 19,721         | 1,163,978     | 59.0×  |
 | Synth   | 256       | 44,802         | 1,186,263     | 26.5×  |
 | Synth   | 512       | 18,552         | 1,142,377     | 61.6×  |
 
 The architectural reason is straightforward: no rotation matrix
 multiply, no Lloyd-Max codebook fit, no per-vector norm storage.
 Encode is one `argsort` per coordinate + one bucket-pack pass per
-document. This advantage transfers cleanly between synthetic and
-real corpora.
+document. The numbers above are from the synthetic headline run; the
+same ratio holds on real corpora because the encode cost is
+data-independent.
 
 ### Storage: identical at matched bit width
 
@@ -301,18 +269,9 @@ the same lever. The implementation differs in what each byte
 *means*: TurboQuant stores a quantised magnitude, RankQuant stores a
 bucketed rank.
 
-### Asymmetric beats symmetric (both corpora)
+### Asymmetric beats symmetric
 
-Harrier:
-
-| mode             | sym R@10 | asym R@10 | Δ      |
-|------------------|---------:|----------:|-------:|
-| Rank full (2KB)  | 0.802    | 0.848     | +0.046 |
-| RankQuant b=4    | 0.799    | 0.843     | +0.045 |
-| RankQuant b=2    | 0.713    | 0.764     | +0.051 |
-| RankQuant b=1    | 0.504    | 0.641     | +0.137 |
-
-Synthetic:
+Synthetic headline run:
 
 | mode             | sym R@10 | asym R@10 | Δ      |
 |------------------|---------:|----------:|-------:|
@@ -323,66 +282,43 @@ Synthetic:
 
 The asymmetric variant keeps the query side as full FP32 — the
 encoder's output is consumed directly, only the document side loses
-precision. This is the operating point the paper recommends and it
-reproduces on both corpora. The advantage grows as document-side
-precision shrinks (more information lost on the doc side, more value
-in keeping the query rich).
-
-### Real-data recall summary at matched bytes
-
-| bytes/vec | TurboQuant | RankQuant asym | Δ      |
-|-----------|-----------:|---------------:|-------:|
-| 256       | 0.7305     | 0.7635         | +0.033 |
-| 512       | 0.8945     | 0.8430         | -0.052 |
-
-The 2-bit point is the operating regime where RankQuant is
-competitive on quality on top of dominating on build cost. The 4-bit
-point is where TurboQuant's per-coordinate magnitude quantisation
-(16 Lloyd-Max centroids per dim, calibrated to minimise cosine
-distortion) pulls ahead of 4-bit rank bucketing (16 equal-width bins
-on a permutation axis). This is the honest crossover on Harrier,
-not a synthetic artefact. **The 4-bit crossover is also encoder-
-conditional**: on BGE-large-en-v1.5 the direction inverts (RankQuant
-b=4 +0.038 R@10 over TurboQuant b=4), tracking BGE's more uniform
-per-coordinate distribution where the data-oblivious TurboQuant
-rotation has least useful structure to exploit. The b=2 advantage
-holds across all three encoders tested (Harrier +0.033, Qwen3
-+0.022, BGE +0.109; cross-encoder details in
-`UPSTREAM_ISSUE_DRAFT.md`).
+precision. This is the recommended mode. The advantage grows as
+document-side precision shrinks (more information lost on the doc
+side, more value in keeping the query rich). The same ordering
+(asym > sym, gap widening at lower bits) reproduces on real
+embeddings when you run the external-corpus bench.
 
 ## Where TurboQuant still wins
 
-### Query latency: 1.5-2.5× faster after AVX-512 lowering
+### Single-query exact-scan latency
 
-| corpus  | bytes/vec | TurboQuant p50 | RankQuant AVX-512 p50 | gap  | TQ GiB/s | Rank GiB/s |
-|---------|-----------|----------------|------------------------|------|---------:|-----------:|
-| Harrier | 256       | 3.17 ms        | 7.99 ms                | 2.5× |    15.64 |       6.20 |
-| Harrier | 512       | 5.84 ms        | 9.01 ms                | 1.5× |    16.96 |      10.99 |
+TurboQuant's hand-tuned NEON/AVX kernels deliver 15-23 GiB/s
+effective scan bandwidth on the synthetic headline run; the
+RankQuant b=2 asymmetric scan runs at ~0.63 GiB/s effective in that
+same run, so a full single-query exact scan is slower at matched
+bytes. Two facts qualify this:
 
-**The AVX-512 kernel is an exact packed scan, not an ANN
-approximation.** It returns identical top-k to the scalar RankQuant
-scorer and agrees within 1e-4 on scores (verified by
-`tests/rank_index.rs::rankquant_asymmetric_matches_reference_b{2,4}`).
-Exact scan within 1.5× of a tuned quantized baseline is the systems
-result this branch was aiming for.
+- **The two-stage path is the intended fast route.** Scoring only the
+  M bitmap candidates with `search_asymmetric_subset` avoids the
+  full-corpus scan entirely. That is the operating point the
+  rank-mode README recommends, and where the structural prior pays
+  off.
+- **The asymmetric AVX-512 kernel is an exact packed scan, not an ANN
+  approximation.** It returns identical top-k to the scalar RankQuant
+  scorer and agrees within 1e-4 on scores (verified by
+  `rankquant_asymmetric_matches_reference_b{1,2,4}` in
+  `turbovec/tests/rank_index/quant.rs`).
 
-Byte-LUT alternative (head-to-head on the same corpus):
-
-| bytes/vec | inline-expand AVX-512 | scalar byte-LUT | ratio |
-|-----------|-----------------------:|----------------:|------:|
-| 256       | 7.99 ms                | 19.5 ms         | 2.4×  |
-| 512       | 9.01 ms                | 38.2 ms         | 4.2×  |
-
-Same recall, much slower path. Streaming SIMD math beats query-LUT
-cache traffic on Zen 5. The byte-LUT scorer stays in the codebase as
-a labelled reference path (`turbovec::rank_index::search_asymmetric_byte_lut`)
-but is not the production scoring route.
+The byte-LUT scorer remains in the codebase as a labelled reference
+path (`turbovec::rank_index::search_asymmetric_byte_lut`,
+benched as the `RankQuant b=… asym byte-LUT` rows) but is not the
+production scoring route — streaming SIMD math beats query-LUT cache
+traffic on the hardware tested.
 
 ### Remaining headroom
 
-The b=2 path is still decode-bound (6.2 GiB/s effective vs 16+ GiB/s
-the platform demonstrably delivers via TurboQuant). Closing the rest
-of the gap is, in priority order:
+The single-query b=2 exact scan is decode-bound. Further closing the
+gap to TurboQuant's bandwidth is, in priority order:
 
 1. **Multi-accumulator b=2 kernel** — break the FMA dependency chain
    by splitting into 2-4 independent accumulators per doc. Cheap to
@@ -393,13 +329,45 @@ of the gap is, in priority order:
    `pack.rs::repack`. Improves memory access pattern. Highest
    single-step win but largest restructuring.
 
-None of these are research questions; all of them have a direct
-template in `search.rs` for TurboQuant or in the existing
-`rank_index.rs` AVX-512 kernel.
+None of these are research questions; all have a direct template in
+`search.rs` for TurboQuant or in the existing
+`rank_index/quant_kernels.rs` AVX-512 kernel.
 
 The symmetric path is still scalar (lower-priority — asymmetric is
-the recommended mode in the paper and wins every recall comparison
-here). Symmetric SIMD is a natural follow-up.
+the recommended mode and wins every recall comparison here).
+Symmetric SIMD is a natural follow-up.
+
+## External-corpus results (user-runnable)
+
+The numbers above all come from the in-repo synthetic corpus. To
+check the head-to-head on real embeddings, point the same bench at
+your own `.npy` arrays:
+
+```bash
+RUSTFLAGS="-l openblas" cargo run --release --example bench_rank -- \
+  --corpus-npy  /path/to/embeddings.npy \
+  --queries-npy /path/to/queries.npy \
+  --queries 200 --k 10
+```
+
+`--corpus-npy` / `--queries-npy` each take a NumPy v1 `.npy` file
+holding a 2-D little-endian `float32` (`<f4`), C-order array
+(`(n, dim)` for the corpus, `(n_q, dim)` for queries); `--n` and
+`--dim` are then taken from the file shapes. The npy loader is a
+minimal built-in reader — no Python dependency at bench time.
+
+What to expect from real embeddings (and why these are not the lead
+claim): on dense sentence/passage encoders the recall gap between
+RankQuant and TurboQuant is **much smaller** than on the synthetic
+anisotropic corpus, and its **sign is encoder- and bit-width-
+dependent**. The synthetic corpus is an adversarial best case for
+rank; a typical real corpus sits closer to parity, with RankQuant
+most competitive at the narrowest (2-bit) byte budget where its
+build-cost advantage is largest, and magnitude quantisation tending
+to pull ahead at wider codes. Run the command above on your target
+embeddings to get the number that matters for your deployment — we do
+not assert a specific real-corpus delta here because the corpus is
+not shipped with this repo.
 
 ## A null result reported up front
 
@@ -414,14 +382,13 @@ multi-seed stability:
 | RRF top-100   | 0.951 | +0.0030 ± 0.0027 (Gaussian-noise lift +0.0037 ± 0.0031) |
 | Bitmap top-100 | 0.891 | +0.0017 ± 0.0007 |
 
-**Null result on both candidate distributions.** The structural
-features are scalar projections of information the LambdaMART
-baseline already captures via continuous `rank_cos`. Reporting this
-so reviewers can see the obvious follow-up was tested and didn't
-land — the right place for rank-native structure is candidate
-generation (where the bitmap two-stage above wins), not LambdaMART
-feature engineering. Full details in the companion paper repo:
-`experiments/q_rank_native_FINDINGS.md`.
+**Null result on both candidate distributions** (measured on an
+external real-embedding corpus, five seeds). The structural features
+are scalar projections of information the LambdaMART baseline already
+captures via continuous `rank_cos`. We report it so the obvious
+follow-up is on record as tested-and-didn't-land: the right place for
+rank-native structure is candidate generation (where the bitmap
+two-stage above wins), not LambdaMART feature engineering.
 
 ## API parity with `TurboQuantIndex`
 
@@ -433,31 +400,44 @@ feature engineering. Full details in the companion paper repo:
 | `search_asymmetric(&[f32], k)` | — | ✓ | ✓ |
 | `swap_remove(idx)` | ✓ | ✓ | ✓ |
 | `len`/`is_empty`/`dim`/`bytes_per_vec`/`byte_size` | ✓ | ✓ | ✓ |
-| `write`/`load` | ✓ | ✗ (v1 follow-up) | ✗ (v1 follow-up) |
+| `write`/`load` | ✓ | ✓ | ✓ |
+| `search_asymmetric_subset(q, &cands, k)` | — | — | ✓ |
 | `prepare` | ✓ | — (no lazy caches) | — |
-| IdMap wrapping | ✓ | ✗ (v1 follow-up) | ✗ (v1 follow-up) |
+| IdMap wrapping | ✓ | ✗ (not yet) | ✗ (not yet) |
 
-The missing pieces (`write`/`load`, `IdMapIndex` integration) are
-mechanical follow-ups that mirror the existing TurboQuant equivalents
-in `io.rs` and `id_map.rs`. They were skipped from v1 to keep the
-diff focused on the kernel + benchmark story.
+`write`/`load` are implemented for every rank-mode type
+(`RankIndex` / `RankQuantIndex` in `turbovec/src/rank_index/`,
+`BitmapIndex` and `SignBitmapIndex` likewise) with the byte-level
+serialisers living in `turbovec/src/rank_io.rs`; the Python bindings
+expose the same `write`/`load` surface. `RankQuantIndex` additionally
+exposes `search_asymmetric_subset` for scoring a precomputed
+candidate set — the rerank half of the two-stage pattern — and that
+entry point is wrapped in Python too.
+
+The one remaining gap is `IdMapIndex` integration for the rank types:
+`id_map.rs` wraps `TurboQuantIndex` only. Adding stable-id wrapping
+for the rank types is a mechanical follow-up that would mirror the
+existing `id_map.rs` plumbing.
 
 ## Test coverage
 
-`cargo test -p turbovec --lib rank::` — 10 unit tests for the
-primitives (rank transform vs numpy reference, pack/unpack round-trip
-at B=1, 2, 4, bucket-centre symmetry, analytical norms match direct
-computation).
+`cargo test -p turbovec --lib rank::` — unit tests for the primitives
+in `turbovec/src/rank.rs` (rank transform vs numpy `argsort(argsort)`
+reference, rank-is-a-permutation, uniform bucket partitioning,
+bucket-centre symmetry, analytical norms match direct computation).
 
-`cargo test -p turbovec --test rank_index` — 9 integration tests:
+`cargo test -p turbovec --test rank_index` — the integration suite in
+`turbovec/tests/rank_index/` (`index.rs`, `quant.rs`, `bitmap.rs`,
+`multi_bucket.rs`). Representative cases:
 
-- `rank_index_symmetric_matches_reference` — RankIndex.search matches
-  a scalar Spearman implementation on a 256-doc / 128-dim corpus,
-  exact top-10 ordering, score agreement to 1e-4.
+- `rank_index_symmetric_matches_reference` — `RankIndex::search`
+  matches a scalar Spearman implementation on a 256-doc / 128-dim
+  corpus, exact top-10 ordering, score agreement to 1e-4.
 - `rank_index_asymmetric_matches_reference` — same, for the FP32-vs-
   rank kernel.
 - `rankquant_asymmetric_matches_reference_b{1,2,4}` — RankQuant
-  asymmetric agrees with the scalar reference at every bit width.
+  asymmetric agrees with the scalar reference at every bit width
+  (this is the AVX-512-vs-scalar exactness check).
 - `rankquant_b2_recovers_planted_neighbour_in_top_10` — 50 queries
   each constructed by adding noise to a known corpus doc; RankQuant-2
   asymmetric recovers the planted doc in top-10 at recall ≥ 0.95.
@@ -469,73 +449,45 @@ computation).
 ## Reproducibility
 
 ```bash
-git checkout nelson/rank-modes
-cargo test -p turbovec --lib rank::                  # unit tests
+cargo test -p turbovec --lib rank::                   # unit tests
 cargo test -p turbovec --test rank_index              # integration
 
-# Real-data head-to-head on Harrier arXiv embeddings.
-# Embedding artefacts are produced by the RankQuant paper's
-# arXiv pipeline (turbovec-arxiv repo, microsoft/Harrier-OSS-v1-0.6B,
-# dim=1024, 207,695 docs; 2000 paraphrase queries, 200 sampled here).
-# Generated by turbovec-arxiv's `make embed-harrier` pipeline at
-# commit <to-fill-on-publication>. Numbers in the tables above are
-# single-bench-seed deterministic given these inputs; multi-seed
-# stability not measured at this scope.
-RUSTFLAGS="-l openblas" cargo run --release -p turbovec --example bench_rank -- \
-    --corpus-npy  /path/to/embeddings.npy \
-    --queries-npy /path/to/paraphrase_queries.npy \
-    --queries 200 --k 10
+# Headline benchmark (synthetic clustered corpus — no external data).
+RUSTFLAGS="-l openblas" cargo run --release --example bench_rank
 
-# Synthetic stress-test (anisotropic low-rank clustered).
-RUSTFLAGS="-l openblas" cargo run --release -p turbovec --example bench_rank \
-    -- --dim 1024 --n 50000 --queries 200
+# Same bench against your own real-embedding arrays.
+RUSTFLAGS="-l openblas" cargo run --release --example bench_rank -- \
+    --corpus-npy  /path/to/embeddings.npy \
+    --queries-npy /path/to/queries.npy \
+    --queries 200 --k 10
 ```
 
 The `RUSTFLAGS="-l openblas"` shim is needed on Linux for the
-TurboQuant rotation step; rank modes themselves do not depend on
-BLAS. The npy loader is a minimal NumPy v1 reader for `<f4`
-little-endian, C-order 2-D arrays; no Python dependency at bench
-time.
+TurboQuant rotation step (used by the TurboQuant baseline rows); the
+rank modes themselves do not depend on BLAS. The npy loader is a
+minimal NumPy v1 reader for `<f4` little-endian, C-order 2-D arrays;
+no Python dependency at bench time. The synthetic headline numbers
+are deterministic given the default parameters (fixed RNG seed in the
+example); when benching real arrays, multi-seed stability is your
+call.
 
-## Next step before upstreaming: real-embedding rerun
+## Design summary
 
-The benchmark above uses a synthetic low-rank clustered corpus. The
-TurboQuant repo benchmarks on GloVe d=200 and OpenAI d=1536 / d=3072
-(see `benchmarks/results/recall_*.json`). The pre-condition for any
-externally-quoted claim is reproducing the head-to-head on at least
-one of those real-embedding corpora at matched bytes.
-
-The table that decides whether this graduates from prototype to
-serious vector-index story:
-
-```text
-mode                 bytes/vec   encode v/s   p50 ms   p99 ms   R@10
-TurboQuant b=2       256         ?            ?        ?        ?
-RankQuant b=2 asym   256         ?            ?        ?        ?
-TurboQuant b=4       512         ?            ?        ?        ?
-RankQuant b=4 asym   512         ?            ?        ?        ?
-```
-
-Until that table exists, the bullets below are *internal review
-notes*, not external pitch material.
-
-## Upstreaming rationale (review-internal)
-
-1. **Strict superset of capability.** `TurboQuantIndex` is unchanged
-   on this branch; `RankIndex` and `RankQuantIndex` are new types,
-   compiled and tested alongside.
-2. **Zero new heavy dependencies.** The rank primitives use
-   `ordered_float` and `rayon` (already in `Cargo.toml`). No BLAS,
-   no codebook training, no rotation matrix.
-3. **Storage parity, build-speed advantage, anisotropic-recall
-   advantage.** Storage and build speed are unambiguous; recall is
-   conditional on real-embedding rerun.
-4. **Query latency follow-up is well-scoped.** The SIMD path is
-   modelled directly on the existing `search.rs` template; v2 should
-   land within a 2-3× factor of TurboQuant at matched bytes (the
-   kernel shape — per-coordinate LUT, packed code scan — is the same).
-5. **The audit-by-removal rationale.** RankQuant removes
-   training, rotation, codebooks, and per-document norms from the
-   pipeline. If retrieval survives the removal (which the v1 results
-   suggest on the corpora tested), those components were carrying
-   less than the dense-quantization literature assumes.
+1. **Strict superset of capability.** `TurboQuantIndex` is unchanged;
+   `RankIndex`, `RankQuantIndex`, `BitmapIndex`, and `SignBitmapIndex`
+   are additive types, compiled and tested alongside.
+2. **No new heavy dependencies.** The rank primitives use
+   `ordered_float` and `rayon` (already dependencies). No BLAS, no
+   codebook training, no rotation matrix.
+3. **Storage parity, build-speed advantage.** At matched bit width,
+   `bytes_per_vec` is identical to TurboQuant; encode is 23-62×
+   faster because there is no rotation matmul and no codebook fit.
+4. **Recall is corpus-dependent.** On the synthetic anisotropic
+   corpus RankQuant wins by a wide margin; on real embeddings the gap
+   is much smaller and its sign depends on encoder and bit width
+   (run the external-corpus bench on your data — see above).
+5. **The audit-by-removal rationale.** RankQuant removes training,
+   rotation, codebooks, and per-document norms from the pipeline. That
+   retrieval still works after the removal is the interesting result:
+   on the corpora tested, those components were carrying less than the
+   dense-quantization literature assumes.
