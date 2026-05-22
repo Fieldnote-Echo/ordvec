@@ -71,6 +71,33 @@ fn try_alloc_zeroed(n: usize) -> io::Result<Vec<u8>> {
     Ok(buf)
 }
 
+/// Read `n` little-endian `W`-byte elements directly into a fallibly
+/// pre-reserved Vec, so an oversized/under-memory load returns an
+/// io::Error instead of aborting (and avoids the 2x byte-buffer + typed-Vec peak).
+///
+/// Building the typed `Vec` via `bytes.chunks_exact(W).map(..).collect()`
+/// uses an infallible allocation — an OOM there is a `SIGABRT`, not a
+/// recoverable error — and holds both the byte buffer and the typed `Vec`
+/// live at once (2x peak). Reserving fallibly and reading element-by-element
+/// removes both problems. The size guards ([`check_payload_bytes`],
+/// [`check_payload_fits_file`]) run *before* this call; `read_le_vec`
+/// reserves the same element count those guards validated.
+fn read_le_vec<R: Read, T, const W: usize>(
+    r: &mut R,
+    n: usize,
+    parse: impl Fn([u8; W]) -> T,
+) -> io::Result<Vec<T>> {
+    let mut v: Vec<T> = Vec::new();
+    v.try_reserve_exact(n)
+        .map_err(|_| invalid("payload allocation too large"))?;
+    let mut buf = [0u8; W];
+    for _ in 0..n {
+        r.read_exact(&mut buf)?;
+        v.push(parse(buf));
+    }
+    Ok(v)
+}
+
 /// Reject a declared payload that cannot fit in the file's remaining bytes.
 ///
 /// `reader` is positioned just past the header; `file_len` is the file's
@@ -199,12 +226,12 @@ pub fn load_rank(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u16>)>
         .ok_or_else(|| invalid("payload size overflows usize"))?;
     check_payload_bytes(payload_bytes)?;
     check_payload_fits_file(&mut f, file_len, payload_bytes)?;
-    let mut bytes = try_alloc_zeroed(payload_bytes)?;
-    f.read_exact(&mut bytes)?;
-    let ranks: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|b| u16::from_le_bytes([b[0], b[1]]))
-        .collect();
+    // `payload_bytes == n_vectors * dim * 2`, so the u16 element count is
+    // `payload_bytes / 2`. Read directly into a fallibly reserved Vec<u16>
+    // instead of allocating a byte buffer and `.collect()`-ing it — the old
+    // intermediate was an infallible (abort-on-OOM) allocation that also
+    // doubled peak memory.
+    let ranks = read_le_vec(&mut f, payload_bytes / 2, u16::from_le_bytes)?;
     // Every stored rank must be a valid coordinate index in `[0, dim)`.
     // An out-of-range value is not an OOB read here (it indexes a
     // per-query LUT sized to `dim` downstream) but silently corrupts the
@@ -378,12 +405,10 @@ pub fn load_bitmap(
         .ok_or_else(|| invalid("payload size overflows usize"))?;
     check_payload_bytes(payload_bytes)?;
     check_payload_fits_file(&mut f, file_len, payload_bytes)?;
-    let mut bytes = try_alloc_zeroed(payload_bytes)?;
-    f.read_exact(&mut bytes)?;
-    let bitmaps: Vec<u64> = bytes
-        .chunks_exact(8)
-        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-        .collect();
+    // `payload_bytes == n_vectors * qpv * 8`, so the u64 element count is
+    // `payload_bytes / 8`. Read directly into a fallibly reserved Vec<u64>
+    // rather than allocating a byte buffer and `.collect()`-ing it.
+    let bitmaps = read_le_vec(&mut f, payload_bytes / 8, u64::from_le_bytes)?;
     Ok((dim, n_top, n_vectors, bitmaps))
 }
 
@@ -466,11 +491,9 @@ pub fn load_sign_bitmap(
         .ok_or_else(|| invalid("payload size overflows usize"))?;
     check_payload_bytes(payload_bytes)?;
     check_payload_fits_file(&mut f, file_len, payload_bytes)?;
-    let mut bytes = try_alloc_zeroed(payload_bytes)?;
-    f.read_exact(&mut bytes)?;
-    let bitmaps: Vec<u64> = bytes
-        .chunks_exact(8)
-        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
-        .collect();
+    // `payload_bytes == n_vectors * qpv * 8`, so the u64 element count is
+    // `payload_bytes / 8`. Read directly into a fallibly reserved Vec<u64>
+    // rather than allocating a byte buffer and `.collect()`-ing it.
+    let bitmaps = read_le_vec(&mut f, payload_bytes / 8, u64::from_le_bytes)?;
     Ok((dim, n_vectors, bitmaps))
 }
