@@ -45,6 +45,70 @@ pub struct RankQuantIndex {
     pub(super) packed: Vec<u8>,
 }
 
+/// SIMD dispatch tier for the asymmetric scan kernels.
+///
+/// Tier selection is gated on *both* runtime CPU features and the
+/// kernel lane invariant for the configured `(dim, bits)` — see
+/// [`select_simd_tier`].
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+enum SimdTier {
+    None,
+    Avx2,
+    Avx512,
+}
+
+/// Choose the asymmetric scan tier for `(dim, bits)`.
+///
+/// Each SIMD kernel carries a lane invariant on `dim`:
+///
+/// - **AVX-512** (`scan_b{2,4}_asym_avx512`): processes 64 codes per
+///   outer iteration (4-way unrolled, 16 codes/chunk), so it requires
+///   `dim % 64 == 0`.
+/// - **AVX2** (`scan_b2_asym_avx2` / `scan_b4_asym_avx2`): b=2 emits 16
+///   codes per 4-byte chunk (`dim % 16 == 0`); b=4 emits 8 codes per
+///   4-byte chunk (`dim % 8 == 0`).
+///
+/// The [`RankQuantIndex::new`] constructor only guarantees
+/// `dim % (1 << bits) == 0` and `dim % (8 / bits) == 0`, which is
+/// *weaker* than the SIMD invariants (e.g. dim 48 / 80 / 20 are valid
+/// constructor dims that violate them). A kernel whose invariant is
+/// unmet silently drops its trailing chunk in release builds and
+/// returns the wrong top-k. This selector returns the highest tier
+/// whose invariant holds — falling back to [`SimdTier::None`] (scalar
+/// LUT, which handles any valid dim) when neither SIMD tier fits.
+#[inline]
+fn select_simd_tier(dim: usize, bits: u8) -> SimdTier {
+    // SIMD asymmetric kernels exist only for b ∈ {2, 4}. b=1 (and any
+    // future unsupported width) always takes the scalar LUT path, which
+    // is also where the byte-LUT bench helper's {2,4}-only restriction
+    // is sidestepped: `search_asymmetric` never feeds a b=1 index to a
+    // {2,4}-only kernel.
+    if !matches!(bits, 2 | 4) {
+        return SimdTier::None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        let avx512 =
+            is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512dq");
+        let avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+        // AVX-512 first: both supported widths pack 64 codes/outer-iter,
+        // so the single invariant is `dim % 64 == 0`.
+        if avx512 && dim % 64 == 0 {
+            return SimdTier::Avx512;
+        }
+        // AVX2: per-width lane invariant.
+        if avx2 && ((bits == 2 && dim % 16 == 0) || (bits == 4 && dim % 8 == 0)) {
+            return SimdTier::Avx2;
+        }
+        SimdTier::None
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        let _ = (dim, bits);
+        SimdTier::None
+    }
+}
+
 impl RankQuantIndex {
     pub fn new(dim: usize, bits: u8) -> Self {
         assert!(matches!(bits, 1 | 2 | 4), "bits must be 1, 2, or 4");
@@ -108,7 +172,11 @@ impl RankQuantIndex {
     pub fn search(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
-        let k_eff = k.min(self.n_vectors);
+        // Clamp the user's `k` to `n_vectors` before it sizes any
+        // `vec![_; nq * k]` allocation below. An unclamped `usize::MAX`
+        // otherwise aborts the process with `capacity overflow`.
+        let k = k.min(self.n_vectors);
+        let k_eff = k;
         if k_eff == 0 {
             return SearchResults {
                 scores: vec![0.0; nq * k],
@@ -173,7 +241,11 @@ impl RankQuantIndex {
     pub fn search_asymmetric(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
-        let k_eff = k.min(self.n_vectors);
+        // Clamp `k` to `n_vectors` before sizing any `vec![_; nq * k]`
+        // allocation; `usize::MAX` otherwise aborts with capacity
+        // overflow.
+        let k = k.min(self.n_vectors);
+        let k_eff = k;
         if k_eff == 0 {
             return SearchResults {
                 scores: vec![0.0; nq * k],
@@ -196,24 +268,19 @@ impl RankQuantIndex {
         // Asymmetric mode: prefer AVX-512 → AVX2 → scalar LUT.
         // Both SIMD paths use the centre-drop trick (raw codes in the
         // hot loop, per-query constant offset re-applied at finalize).
-        #[derive(Copy, Clone, PartialEq)]
-        enum SimdTier {
-            None,
-            Avx2,
-            Avx512,
-        }
-        #[cfg(target_arch = "x86_64")]
-        let simd_tier = if is_x86_feature_detected!("avx512f")
-            && is_x86_feature_detected!("avx512dq")
-        {
-            SimdTier::Avx512
-        } else if is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma") {
-            SimdTier::Avx2
-        } else {
-            SimdTier::None
-        };
-        #[cfg(not(target_arch = "x86_64"))]
-        let simd_tier = SimdTier::None;
+        //
+        // CRITICAL: each SIMD kernel carries a *lane invariant* on `dim`
+        // (AVX-512 processes 64 codes per outer iter → needs dim % 64;
+        // AVX2 b=2 processes 16 codes/chunk → needs dim % 16; AVX2 b=4
+        // processes 8 codes/chunk → needs dim % 8). The constructor only
+        // guarantees `dim % (1 << bits) == 0` and `dim % (8 / bits) == 0`,
+        // so constructor-valid dims like 48 / 80 / 20 can violate the
+        // SIMD invariant. In release builds the kernels' `debug_assert`
+        // is compiled out and they silently drop the trailing chunk →
+        // wrong top-k. The dispatch below must therefore only select a
+        // tier whose invariant holds for (dim, bits); otherwise it falls
+        // back to the scalar LUT path which handles any valid dim.
+        let simd_tier = select_simd_tier(dim, bits);
 
         // For the AVX2 path we drop the per-lane centre subtract from
         // the hot loop and add it back as a per-query constant offset
@@ -387,6 +454,16 @@ impl RankQuantIndex {
         k: usize,
     ) -> (Vec<f32>, Vec<i64>) {
         assert_eq!(query.len(), self.dim);
+        // Bounds-check candidate ids before the gather below indexes
+        // `self.packed[src..src + bpv]` with `src = di * bpv`. An OOB id
+        // otherwise surfaces as a cryptic slice-range panic; fail fast
+        // with a clear message instead. (The Python FFI validates ids
+        // separately, so this assert is the Rust-side backstop.)
+        assert!(
+            candidates.iter().all(|&di| (di as usize) < self.n_vectors),
+            "search_asymmetric_subset: candidate id out of range (n_vectors {})",
+            self.n_vectors,
+        );
         let dim = self.dim;
         let bits = self.bits;
         let bpv = self.bytes_per_vec();
@@ -413,28 +490,30 @@ impl RankQuantIndex {
                 .copy_from_slice(&self.packed[src..src + bpv]);
         }
 
-        // Dispatch: prefer AVX-512 → AVX2 → scalar LUT.
+        // Dispatch: prefer AVX-512 → AVX2 → scalar LUT. Tier selection
+        // is gated on the kernel lane invariant for (dim, bits) via
+        // `select_simd_tier` — the same guard `search_asymmetric` uses —
+        // so a constructor-valid-but-SIMD-invalid dim (48 / 80 / 20)
+        // never reaches a kernel that would drop its tail chunk.
+        let simd_tier = select_simd_tier(dim, bits);
         let mut top = TopK::new(k_eff);
         let mut centre_drop_used = false;
         #[cfg(target_arch = "x86_64")]
         unsafe {
-            let use_avx512 = is_x86_feature_detected!("avx512f")
-                && is_x86_feature_detected!("avx512dq");
-            let use_avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
-            match (use_avx512, use_avx2, bits) {
-                (true, _, 2) => {
+            match (simd_tier, bits) {
+                (SimdTier::Avx512, 2) => {
                     scan_b2_asym_avx512(&sub_packed, m, dim, &q_unit, inv_norm, &mut top);
                     centre_drop_used = true;
                 }
-                (true, _, 4) => {
+                (SimdTier::Avx512, 4) => {
                     scan_b4_asym_avx512(&sub_packed, m, dim, &q_unit, inv_norm, &mut top);
                     centre_drop_used = true;
                 }
-                (false, true, 2) => {
+                (SimdTier::Avx2, 2) => {
                     scan_b2_asym_avx2(&sub_packed, m, dim, &q_unit, inv_norm, &mut top);
                     centre_drop_used = true;
                 }
-                (false, true, 4) => {
+                (SimdTier::Avx2, 4) => {
                     scan_b4_asym_avx2(&sub_packed, m, dim, &q_unit, inv_norm, &mut top);
                     centre_drop_used = true;
                 }
@@ -584,6 +663,14 @@ fn scan_b4_asym_byte_lut(
 /// [`RankQuantIndex::search_asymmetric`] in production (which prefers
 /// the AVX2 inline-expand kernel where available). Exposed so the
 /// example bench can compare the two empirically on the same data.
+///
+/// **Bit-width restriction:** the byte-LUT precomputes per-byte
+/// contributions for the 4-codes-per-byte (b=2) and 2-codes-per-byte
+/// (b=4) packings only. It does **not** support b=1 and will panic on
+/// a b=1 index. This is acceptable because it is a benchmarking helper:
+/// production callers reach for [`RankQuantIndex::search_asymmetric`],
+/// whose dispatch routes b=1 to the scalar LUT path (the SIMD/byte-LUT
+/// kernels are only selected for b ∈ {2, 4}). Pass a b ∈ {2, 4} index.
 ///
 /// Returns the raw `Vec<i64>` of doc indices per query, length
 /// `queries.len() / dim * k`.

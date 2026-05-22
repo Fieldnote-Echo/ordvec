@@ -66,7 +66,11 @@ impl RankIndex {
     pub fn search(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
-        let k_eff = k.min(self.n_vectors);
+        // Clamp `k` to `n_vectors` before it sizes the `vec![_; nq * k]`
+        // result buffers; an unclamped `usize::MAX` aborts the process
+        // with `capacity overflow`.
+        let k = k.min(self.n_vectors);
+        let k_eff = k;
         if k_eff == 0 {
             return SearchResults {
                 scores: vec![0.0; nq * k],
@@ -125,7 +129,11 @@ impl RankIndex {
     pub fn search_asymmetric(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
-        let k_eff = k.min(self.n_vectors);
+        // Clamp `k` to `n_vectors` before sizing the `vec![_; nq * k]`
+        // result buffers; `usize::MAX` otherwise aborts with capacity
+        // overflow.
+        let k = k.min(self.n_vectors);
+        let k_eff = k;
         if k_eff == 0 {
             return SearchResults {
                 scores: vec![0.0; nq * k],
