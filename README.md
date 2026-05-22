@@ -23,13 +23,14 @@ analytical. There are **no system dependencies** — no BLAS, no
 
 ## Provenance
 
-ordvec is original ordinal/sign retrieval code, developed within the
-[turbovec](https://github.com/RyanCodrai/turbovec) project — an
-MIT-licensed vector-quantization crate by Ryan Codrai — and factored
-out here as a standalone, zero-system-dependency crate. It includes
-none of turbovec's own source, only the rank/sign substrate; the full
-development history is preserved in this repository's git log. With
-thanks to the turbovec project, where this substrate was developed.
+ordvec is an original ordinal/sign retrieval substrate that was
+developed within the [turbovec](https://github.com/RyanCodrai/turbovec)
+project — an MIT-licensed vector-quantization crate by Ryan Codrai —
+and factored out here as a standalone, zero-system-dependency crate.
+The rank/sign modules and their tests (including the red-team
+regression suites) carry their full development history in this
+repository's git log. With thanks to the turbovec project, where this
+substrate was built.
 
 ## Reproducible benchmark
 
