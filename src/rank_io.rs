@@ -29,7 +29,7 @@
 //! Any malformed input returns `io::Error` rather than panicking.
 
 use std::fs::File;
-use std::io::{self, BufReader, BufWriter, Read, Write};
+use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
 use std::path::Path;
 
 const TVR_MAGIC: &[u8; 4] = b"TVR1";
@@ -55,6 +55,43 @@ pub const MAX_VECTORS: usize = 64 * 1024 * 1024;
 
 fn invalid<S: Into<String>>(msg: S) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, msg.into())
+}
+
+/// Allocate a zeroed `Vec<u8>` of `n` bytes using *fallible* allocation.
+///
+/// `vec![0u8; n]` aborts the process on allocation failure (the abort is
+/// not a recoverable `io::Error`). Sizes here are derived from
+/// attacker-influenced headers, so reserve via `try_reserve_exact` and only
+/// then `resize` — an OOM becomes `InvalidData` instead of `SIGABRT`.
+fn try_alloc_zeroed(n: usize) -> io::Result<Vec<u8>> {
+    let mut buf: Vec<u8> = Vec::new();
+    buf.try_reserve_exact(n)
+        .map_err(|_| invalid("payload allocation too large"))?;
+    buf.resize(n, 0);
+    Ok(buf)
+}
+
+/// Reject a declared payload that cannot fit in the file's remaining bytes.
+///
+/// `reader` is positioned just past the header; `file_len` is the file's
+/// total length. A file cannot contain more payload than its own length,
+/// so this catches a forged "tiny header claims gigabytes" before any
+/// allocation — the primary defense, with [`try_alloc_zeroed`] as
+/// defense-in-depth. `stream_position` gives the bytes already consumed
+/// without manual offset accounting.
+fn check_payload_fits_file<R: Seek>(
+    reader: &mut R,
+    file_len: u64,
+    payload_bytes: usize,
+) -> io::Result<()> {
+    let pos = reader.stream_position()?;
+    let remaining = file_len.saturating_sub(pos);
+    if payload_bytes as u64 > remaining {
+        return Err(invalid(
+            "declared payload exceeds remaining file size (truncated or forged header)",
+        ));
+    }
+    Ok(())
 }
 
 fn check_dim(dim: usize) -> io::Result<()> {
@@ -135,7 +172,9 @@ pub fn write_rank(
 }
 
 pub fn load_rank(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u16>)> {
-    let mut f = BufReader::new(File::open(path)?);
+    let file = File::open(path)?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != TVR_MAGIC {
@@ -159,7 +198,8 @@ pub fn load_rank(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u16>)>
         .and_then(|x| x.checked_mul(2))
         .ok_or_else(|| invalid("payload size overflows usize"))?;
     check_payload_bytes(payload_bytes)?;
-    let mut bytes = vec![0u8; payload_bytes];
+    check_payload_fits_file(&mut f, file_len, payload_bytes)?;
+    let mut bytes = try_alloc_zeroed(payload_bytes)?;
     f.read_exact(&mut bytes)?;
     let ranks: Vec<u16> = bytes
         .chunks_exact(2)
@@ -205,7 +245,9 @@ pub fn write_rankquant(
 }
 
 pub fn load_rankquant(path: impl AsRef<Path>) -> io::Result<(u8, usize, usize, Vec<u8>)> {
-    let mut f = BufReader::new(File::open(path)?);
+    let file = File::open(path)?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != TVRQ_MAGIC {
@@ -258,7 +300,8 @@ pub fn load_rankquant(path: impl AsRef<Path>) -> io::Result<(u8, usize, usize, V
         .map(|x| x / 8)
         .ok_or_else(|| invalid("payload size overflows usize"))?;
     check_payload_bytes(payload_bytes)?;
-    let mut packed = vec![0u8; payload_bytes];
+    check_payload_fits_file(&mut f, file_len, payload_bytes)?;
+    let mut packed = try_alloc_zeroed(payload_bytes)?;
     f.read_exact(&mut packed)?;
     Ok((bits, dim, n_vectors, packed))
 }
@@ -294,7 +337,9 @@ pub fn write_bitmap(
 pub fn load_bitmap(
     path: impl AsRef<Path>,
 ) -> io::Result<(usize, usize, usize, Vec<u64>)> {
-    let mut f = BufReader::new(File::open(path)?);
+    let file = File::open(path)?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != TVBM_MAGIC {
@@ -332,7 +377,8 @@ pub fn load_bitmap(
         .and_then(|x| x.checked_mul(8))
         .ok_or_else(|| invalid("payload size overflows usize"))?;
     check_payload_bytes(payload_bytes)?;
-    let mut bytes = vec![0u8; payload_bytes];
+    check_payload_fits_file(&mut f, file_len, payload_bytes)?;
+    let mut bytes = try_alloc_zeroed(payload_bytes)?;
     f.read_exact(&mut bytes)?;
     let bitmaps: Vec<u64> = bytes
         .chunks_exact(8)
@@ -392,7 +438,9 @@ pub fn write_sign_bitmap(
 pub fn load_sign_bitmap(
     path: impl AsRef<Path>,
 ) -> io::Result<(usize, usize, Vec<u64>)> {
-    let mut f = BufReader::new(File::open(path)?);
+    let file = File::open(path)?;
+    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
     if &magic != TVSB_MAGIC {
@@ -417,7 +465,8 @@ pub fn load_sign_bitmap(
         .and_then(|x| x.checked_mul(8))
         .ok_or_else(|| invalid("payload size overflows usize"))?;
     check_payload_bytes(payload_bytes)?;
-    let mut bytes = vec![0u8; payload_bytes];
+    check_payload_fits_file(&mut f, file_len, payload_bytes)?;
+    let mut bytes = try_alloc_zeroed(payload_bytes)?;
     f.read_exact(&mut bytes)?;
     let bitmaps: Vec<u64> = bytes
         .chunks_exact(8)
