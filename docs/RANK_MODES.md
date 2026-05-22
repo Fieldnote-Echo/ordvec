@@ -26,15 +26,18 @@ cosine ground truth).
 
 Four rows that tell the story:
 
-- **At M=100, two-stage matches TurboQuant b=2's recall at 6.3× lower
-  latency** (0.53 ms vs 3.36 ms; 0.7280 vs 0.7305). Storage is
-  384 B/vec (256 RankQuant + 128 bitmap) vs TurboQuant's 256.
+- **At M=100, two-stage matches TurboQuant b=2's recall within
+  −0.003 R@10 at 6.3× lower latency** (0.53 ms vs 3.36 ms; 0.7280 vs
+  0.7305), at 1.5× the per-vector storage (384 B/vec = 256 RankQuant
+  + 128 bitmap, vs TurboQuant's 256).
 - **At M=500, two-stage beats TurboQuant b=2 by +2.8 R@10 at 5.6×
-  lower latency** (0.60 ms vs 3.36 ms, 0.7585 vs 0.7305).
+  lower latency** (0.60 ms vs 3.36 ms, 0.7585 vs 0.7305), at 1.5×
+  the storage.
 - **At M=5000, two-stage recovers the full exact-RankQuant R@10
   (0.7635) at 3.9× lower latency than TurboQuant b=2** (0.85 ms vs
-  3.36 ms). The bitmap probe captures 100% of the exact top-10 at
-  this M, so the rerank reproduces the exact result.
+  3.36 ms), at 1.5× the storage. The bitmap probe captures 100% of
+  the exact top-10 at this M, so the rerank reproduces the exact
+  result.
 - Bitmap-only at 0.42 ms / R@10 = 0.45 is the coarse probe — not the
   final scorer, but the candidate generator that makes two-stage
   fast at every M.
@@ -66,10 +69,13 @@ so the displayed cosines stay exact.
 > for the asymmetric path with a scalar LUT fallback. Numbers below
 > are head-to-head on the paper's exact arXiv corpus (207,695
 > Harrier-OSS-v1-0.6B embeddings, 200 paraphrase queries) plus a
-> structured synthetic stress-test. The 2-bit point is the operating
-> regime where RankQuant beats TurboQuant on recall and dominates on
-> build cost; at 4-bit TurboQuant's cosine optimisation wins on recall
-> but RankQuant's query latency is within 1.5×.
+> structured synthetic stress-test. On Harrier at 2-bit, RankQuant
+> beats TurboQuant on recall and dominates build cost; on Harrier at
+> 4-bit, TurboQuant's cosine optimisation wins on recall but
+> RankQuant's query latency is within 1.5×. The 4-bit result is
+> encoder-conditional — see `UPSTREAM_ISSUE_DRAFT.md` §cross-encoder
+> for the BGE inversion (RankQuant b=4 wins +0.038 R@10 on BGE,
+> tracking BGE's more uniform per-coordinate distribution).
 
 ## Bench environment
 
@@ -152,9 +158,9 @@ plausible formal target. Under a shared-latent-support model where
 relevant documents have elevated coordinates on a query-specific
 support set `S_q`, the top-bucket overlap statistic is monotone in
 the likelihood ratio for relevance, suggesting that bitmap probing
-is approximately Bayes-optimal in that regime. We do not claim that
-theorem here; this section flags it as the natural mathematical
-direction for the empirical result in the table above.
+may approach Bayes-optimality under that model. We do not claim
+that theorem here; this section flags it as the natural
+mathematical direction for the empirical result in the table above.
 
 The systems consequence is what the bench measures: at M=500 the
 bitmap probe captures 98.5% of exact RankQuant's top-10 neighbours,
@@ -334,8 +340,15 @@ competitive on quality on top of dominating on build cost. The 4-bit
 point is where TurboQuant's per-coordinate magnitude quantisation
 (16 Lloyd-Max centroids per dim, calibrated to minimise cosine
 distortion) pulls ahead of 4-bit rank bucketing (16 equal-width bins
-on a permutation axis). This is the honest crossover, not a
-synthetic artefact.
+on a permutation axis). This is the honest crossover on Harrier,
+not a synthetic artefact. **The 4-bit crossover is also encoder-
+conditional**: on BGE-large-en-v1.5 the direction inverts (RankQuant
+b=4 +0.038 R@10 over TurboQuant b=4), tracking BGE's more uniform
+per-coordinate distribution where the data-oblivious TurboQuant
+rotation has least useful structure to exploit. The b=2 advantage
+holds across all three encoders tested (Harrier +0.033, Qwen3
++0.022, BGE +0.109; cross-encoder details in
+`UPSTREAM_ISSUE_DRAFT.md`).
 
 ## Where TurboQuant still wins
 
@@ -387,6 +400,28 @@ template in `search.rs` for TurboQuant or in the existing
 The symmetric path is still scalar (lower-priority — asymmetric is
 the recommended mode in the paper and wins every recall comparison
 here). Symmetric SIMD is a natural follow-up.
+
+## A null result reported up front
+
+We also tested adding 10 rank-native structural features (per-(q, d)
+bitmap-overlap counts, bilinear bucket-pair contingency cells,
+query-level concentration broadcast) to a LambdaMART reranker on
+both RRF-generated and bitmap-generated candidate sets. Five-seed
+multi-seed stability:
+
+| candidate source | baseline R@10 | structural-feature lift |
+|---|---:|---:|
+| RRF top-100   | 0.951 | +0.0030 ± 0.0027 (Gaussian-noise lift +0.0037 ± 0.0031) |
+| Bitmap top-100 | 0.891 | +0.0017 ± 0.0007 |
+
+**Null result on both candidate distributions.** The structural
+features are scalar projections of information the LambdaMART
+baseline already captures via continuous `rank_cos`. Reporting this
+so reviewers can see the obvious follow-up was tested and didn't
+land — the right place for rank-native structure is candidate
+generation (where the bitmap two-stage above wins), not LambdaMART
+feature engineering. Full details in the companion paper repo:
+`experiments/q_rank_native_FINDINGS.md`.
 
 ## API parity with `TurboQuantIndex`
 
@@ -440,7 +475,12 @@ cargo test -p turbovec --test rank_index              # integration
 
 # Real-data head-to-head on Harrier arXiv embeddings.
 # Embedding artefacts are produced by the RankQuant paper's
-# arXiv pipeline (turbovec-arxiv repo, microsoft/Harrier-OSS-v1-0.6B).
+# arXiv pipeline (turbovec-arxiv repo, microsoft/Harrier-OSS-v1-0.6B,
+# dim=1024, 207,695 docs; 2000 paraphrase queries, 200 sampled here).
+# Generated by turbovec-arxiv's `make embed-harrier` pipeline at
+# commit <to-fill-on-publication>. Numbers in the tables above are
+# single-bench-seed deterministic given these inputs; multi-seed
+# stability not measured at this scope.
 RUSTFLAGS="-l openblas" cargo run --release -p turbovec --example bench_rank -- \
     --corpus-npy  /path/to/embeddings.npy \
     --queries-npy /path/to/paraphrase_queries.npy \

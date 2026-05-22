@@ -42,17 +42,25 @@ pub struct SignBitmapIndex {
 impl SignBitmapIndex {
     /// Build an empty index for `dim`-dimensional embeddings.
     ///
-    /// `dim` must be a strictly positive multiple of 64. `dim = 0`
-    /// is rejected at construction — accepting it would create an
-    /// index whose `qwords_per_vec = 0`, which then divides by zero
-    /// inside [`Self::add`] when computing `vectors.len() / dim`.
-    /// (The matching invariant in [`crate::BitmapIndex::new`] is
-    /// enforced transitively via `n_top > 0 && n_top < dim`;
-    /// SignBitmapIndex doesn't take `n_top`, so it needs the
-    /// explicit check.)
+    /// `dim` must be a multiple of 64 in
+    /// `[64, crate::rank_io::MAX_SIGN_BITMAP_DIM]`. `dim = 0` is
+    /// rejected because it would create an index whose
+    /// `qwords_per_vec = 0`, dividing by zero inside [`Self::add`].
+    /// The upper bound matches the loader so any index built here
+    /// can be persisted via [`Self::write`] and reloaded via
+    /// [`Self::load`] — without it, `new` could produce indices the
+    /// loader refuses to round-trip (the issue Codex caught after the
+    /// first `.tvsb` revision used [`crate::rank_io::MAX_DIM`]'s
+    /// rank-storage `u16::MAX` cap, which doesn't apply to sign
+    /// bitmaps).
     pub fn new(dim: usize) -> Self {
         assert!(dim > 0, "dim must be > 0");
         assert_eq!(dim % 64, 0, "dim must be a multiple of 64");
+        assert!(
+            dim <= crate::rank_io::MAX_SIGN_BITMAP_DIM,
+            "dim must be <= MAX_SIGN_BITMAP_DIM (= {})",
+            crate::rank_io::MAX_SIGN_BITMAP_DIM,
+        );
         Self {
             dim,
             qwords_per_vec: dim / 64,
@@ -189,6 +197,38 @@ impl SignBitmapIndex {
     }
     pub fn byte_size(&self) -> usize {
         self.bitmaps.len() * std::mem::size_of::<u64>()
+    }
+
+    /// Persist to a `.tvsb` file. Format: 13-byte header + LE u64 bitmaps.
+    pub fn write(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        crate::rank_io::write_sign_bitmap(path, self.dim, self.n_vectors, &self.bitmaps)
+    }
+
+    /// Load from a `.tvsb` file produced by [`Self::write`].
+    ///
+    /// Returns `io::Error::InvalidData` on any constructor-invariant
+    /// violation. `load_sign_bitmap` already validates dim and n_vectors;
+    /// this method only verifies the payload length matches the
+    /// expected `n_vectors * dim / 64` u64 lanes.
+    pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let (dim, n_vectors, bitmaps) = crate::rank_io::load_sign_bitmap(path)?;
+        let qpv = dim / 64;
+        let expected = n_vectors.saturating_mul(qpv);
+        if bitmaps.len() != expected {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "TVSB payload length {} does not match expected {expected} u64 lanes",
+                    bitmaps.len(),
+                ),
+            ));
+        }
+        Ok(Self {
+            dim,
+            qwords_per_vec: qpv,
+            n_vectors,
+            bitmaps,
+        })
     }
 }
 
@@ -478,6 +518,74 @@ mod tests {
                     single[bi], batched[bi],
                     "batched diverged from single-query at batch idx {bi}, M={m}",
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn large_dim_above_u16_max_roundtrips() {
+        // Regression for the Codex stop-time finding: SignBitmapIndex::new
+        // accepts dim > u16::MAX (65535) as a positive multiple of 64,
+        // but the first revision of `load_sign_bitmap` reused the
+        // RankIndex-specific `check_dim` helper whose u16::MAX cap
+        // rejected any such file. The dedicated `check_sign_bitmap_dim`
+        // aligns the constructor and loader invariants.
+        const BIG_D: usize = 65_536; // u16::MAX + 1 — the smallest dim above the old cap
+        let n = 4;
+        let mut rng = ChaCha8Rng::seed_from_u64(41);
+        let corpus: Vec<f32> = (0..n * BIG_D).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let mut original = SignBitmapIndex::new(BIG_D);
+        original.add(&corpus);
+
+        let tmp = std::env::temp_dir().join("turbovec_sign_bitmap_large_dim.tvsb");
+        original.write(&tmp).expect("write must accept dim > u16::MAX");
+        let loaded = SignBitmapIndex::load(&tmp).expect("load must accept dim > u16::MAX");
+        std::fs::remove_file(&tmp).ok();
+
+        assert_eq!(loaded.dim(), BIG_D);
+        assert_eq!(loaded.len(), n);
+        assert_eq!(loaded.bitmaps, original.bitmaps);
+    }
+
+    #[test]
+    fn write_then_load_roundtrips() {
+        let n = 64;
+        let corpus = make_corpus(17, n);
+        let mut original = SignBitmapIndex::new(D);
+        original.add(&corpus);
+
+        let tmp = std::env::temp_dir().join("turbovec_sign_bitmap_roundtrip.tvsb");
+        original.write(&tmp).expect("write should succeed");
+        let loaded = SignBitmapIndex::load(&tmp).expect("load should succeed");
+        std::fs::remove_file(&tmp).ok();
+
+        assert_eq!(loaded.dim(), original.dim());
+        assert_eq!(loaded.len(), original.len());
+        assert_eq!(loaded.bitmaps, original.bitmaps);
+
+        // Sanity: same query produces same top-M.
+        let mut rng = ChaCha8Rng::seed_from_u64(23);
+        let query: Vec<f32> = (0..D).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let orig_top = original.top_m_candidates(&query, 10);
+        let loaded_top = loaded.top_m_candidates(&query, 10);
+        assert_eq!(orig_top, loaded_top);
+    }
+
+    #[test]
+    fn load_rejects_bad_magic() {
+        let tmp = std::env::temp_dir().join("turbovec_sign_bitmap_bad_magic.tvsb");
+        std::fs::write(&tmp, b"BAD!\x01\x00\x00\x01\x00\x00\x00\x00\x00").expect("write tmp");
+        // SignBitmapIndex does not derive Debug (matches the convention of
+        // other rank-mode types), so unwrap_err / expect_err do not apply;
+        // use a match to inspect the Err arm instead.
+        match SignBitmapIndex::load(&tmp) {
+            Ok(_) => {
+                std::fs::remove_file(&tmp).ok();
+                panic!("load must reject a file with the wrong magic");
+            }
+            Err(e) => {
+                std::fs::remove_file(&tmp).ok();
+                assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
             }
         }
     }

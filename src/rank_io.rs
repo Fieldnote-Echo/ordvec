@@ -35,11 +35,18 @@ use std::path::Path;
 const TVR_MAGIC: &[u8; 4] = b"TVR1";
 const TVRQ_MAGIC: &[u8; 4] = b"TVRQ";
 const TVBM_MAGIC: &[u8; 4] = b"TVBM";
+const TVSB_MAGIC: &[u8; 4] = b"TVSB";
 const VERSION: u8 = 1;
 
 /// Largest accepted `dim` from a loaded file. Matches `u16::MAX` so the
 /// rank transform's `u16` invariant in [`crate::RankIndex`] is honoured.
 pub const MAX_DIM: usize = u16::MAX as usize;
+/// Largest accepted `dim` for sign-bitmap files. The rank-storage
+/// invariant (`u16` ranks) does not apply here, so the cap is the
+/// on-disk u32 header field clamped to a safe multiple of 64. Set to
+/// `1 << 24 = 16_777_216` — comfortably above any realistic embedding
+/// dimensionality while bounded well within usize math.
+pub const MAX_SIGN_BITMAP_DIM: usize = 1 << 24;
 /// Largest accepted `n_vectors` from a loaded file. 64 M docs at
 /// `dim=u16::MAX` (128 KiB / vec for u16 ranks) tops out at ~8 TiB,
 /// well past any sane on-disk index. Chosen to fail loud before
@@ -54,6 +61,28 @@ fn check_dim(dim: usize) -> io::Result<()> {
     if dim < 2 || dim > MAX_DIM {
         return Err(invalid(format!(
             "dim {dim} out of range [2, {MAX_DIM}]"
+        )));
+    }
+    Ok(())
+}
+
+/// Dimension check for `.tvsb` sign-bitmap files.
+///
+/// The `u16::MAX` ceiling in [`check_dim`] exists to honour
+/// [`crate::RankIndex`]'s `u16` rank-storage invariant. Sign bitmaps
+/// have no such constraint — `dim` is just a bit count — so this check
+/// uses [`MAX_SIGN_BITMAP_DIM`] instead. Without it, any
+/// `SignBitmapIndex::new(d)` with `d > u16::MAX` could be written but
+/// would fail on load, breaking roundtrip persistence.
+fn check_sign_bitmap_dim(dim: usize) -> io::Result<()> {
+    if dim < 64 || dim > MAX_SIGN_BITMAP_DIM {
+        return Err(invalid(format!(
+            "TVSB dim {dim} out of range [64, {MAX_SIGN_BITMAP_DIM}]"
+        )));
+    }
+    if dim % 64 != 0 {
+        return Err(invalid(format!(
+            "TVSB dim {dim} is not a multiple of 64"
         )));
     }
     Ok(())
@@ -280,4 +309,89 @@ pub fn load_bitmap(
         .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
         .collect();
     Ok((dim, n_top, n_vectors, bitmaps))
+}
+
+/// Persist a [`crate::SignBitmapIndex`] payload to a `.tvsb` file.
+///
+/// On-disk layout (little-endian throughout):
+///
+/// | offset | bytes | field                       |
+/// |-------:|:-----:|-----------------------------|
+/// | 0      | 4     | magic = `TVSB`              |
+/// | 4      | 1     | version = 1                 |
+/// | 5      | 4     | `dim` (u32)                 |
+/// | 9      | 4     | `n_vectors` (u32)           |
+/// | 13     | …     | `n_vectors * dim/64` u64s   |
+///
+/// 13-byte header — one u32 shorter than `TVBM` because SignBitmapIndex
+/// has no `n_top` parameter (the threshold is fixed at zero).
+pub fn write_sign_bitmap(
+    path: impl AsRef<Path>,
+    dim: usize,
+    n_vectors: usize,
+    bitmaps: &[u64],
+) -> io::Result<()> {
+    let qpv = dim / 64;
+    assert_eq!(bitmaps.len(), n_vectors * qpv);
+    let mut f = BufWriter::new(File::create(path)?);
+    f.write_all(TVSB_MAGIC)?;
+    f.write_all(&[VERSION])?;
+    f.write_all(&(dim as u32).to_le_bytes())?;
+    f.write_all(&(n_vectors as u32).to_le_bytes())?;
+    for &w in bitmaps {
+        f.write_all(&w.to_le_bytes())?;
+    }
+    f.flush()?;
+    Ok(())
+}
+
+/// Load a `.tvsb` file written by [`write_sign_bitmap`].
+///
+/// Validates magic, version, dim (must be in
+/// `[64, MAX_SIGN_BITMAP_DIM]` and a multiple of 64), and `n_vectors`
+/// (≤ `MAX_VECTORS`). Payload size is computed with `checked_mul` and
+/// rejected if it overflows or exceeds the 128 GiB hard cap from
+/// [`check_payload_bytes`]. Any malformed input returns
+/// `io::Error::InvalidData`.
+///
+/// Dim validation deliberately does NOT use [`check_dim`]: that helper
+/// caps at `u16::MAX` to honour [`crate::RankIndex`]'s `u16` rank
+/// invariant, which sign bitmaps do not share. Sharing it would reject
+/// valid `SignBitmapIndex::new(d)` instances for any `d > 65535`,
+/// breaking the constructor↔loader roundtrip.
+pub fn load_sign_bitmap(
+    path: impl AsRef<Path>,
+) -> io::Result<(usize, usize, Vec<u64>)> {
+    let mut f = BufReader::new(File::open(path)?);
+    let mut magic = [0u8; 4];
+    f.read_exact(&mut magic)?;
+    if &magic != TVSB_MAGIC {
+        return Err(invalid("not a TVSB file: wrong magic"));
+    }
+    let mut ver = [0u8; 1];
+    f.read_exact(&mut ver)?;
+    if ver[0] != VERSION {
+        return Err(invalid(format!("unsupported TVSB version: {}", ver[0])));
+    }
+    let mut dim_buf = [0u8; 4];
+    f.read_exact(&mut dim_buf)?;
+    let dim = u32::from_le_bytes(dim_buf) as usize;
+    check_sign_bitmap_dim(dim)?;
+    let mut n_buf = [0u8; 4];
+    f.read_exact(&mut n_buf)?;
+    let n_vectors = u32::from_le_bytes(n_buf) as usize;
+    check_n_vectors(n_vectors)?;
+    let qpv = dim / 64;
+    let payload_bytes = n_vectors
+        .checked_mul(qpv)
+        .and_then(|x| x.checked_mul(8))
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    let mut bytes = vec![0u8; payload_bytes];
+    f.read_exact(&mut bytes)?;
+    let bitmaps: Vec<u64> = bytes
+        .chunks_exact(8)
+        .map(|b| u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]))
+        .collect();
+    Ok((dim, n_vectors, bitmaps))
 }
