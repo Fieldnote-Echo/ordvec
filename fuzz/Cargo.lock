@@ -265,7 +265,6 @@ dependencies = [
 name = "ordvec-fuzz"
 version = "0.0.0"
 dependencies = [
- "arbitrary",
  "libfuzzer-sys",
  "ordvec",
  "tempfile",
