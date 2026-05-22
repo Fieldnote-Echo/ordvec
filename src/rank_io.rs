@@ -165,6 +165,16 @@ pub fn load_rank(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u16>)>
         .chunks_exact(2)
         .map(|b| u16::from_le_bytes([b[0], b[1]]))
         .collect();
+    // Every stored rank must be a valid coordinate index in `[0, dim)`.
+    // An out-of-range value is not an OOB read here (it indexes a
+    // per-query LUT sized to `dim` downstream) but silently corrupts the
+    // Spearman score, so reject it at the loader boundary rather than
+    // surfacing as a wrong-but-not-crashing result.
+    if ranks.iter().any(|&r| (r as usize) >= dim) {
+        return Err(invalid(format!(
+            "TVR1 rank value >= dim ({dim}); ranks must be a permutation of [0, dim)"
+        )));
+    }
     Ok((dim, n_vectors, ranks))
 }
 
@@ -218,6 +228,26 @@ pub fn load_rankquant(path: impl AsRef<Path>) -> io::Result<(u8, usize, usize, V
     f.read_exact(&mut dim_buf)?;
     let dim = u32::from_le_bytes(dim_buf) as usize;
     check_dim(dim)?;
+    // Constant-composition invariants (documented at module level and
+    // enforced by `RankQuantIndex::new`): `dim` must be a multiple of
+    // both `2^bits` (one bucket-rank slot per code value) and the
+    // codes-per-byte packing factor `8 / bits`. Without these, a forged
+    // header with an indivisible `dim` would yield a packed buffer the
+    // bucket-rank decoder cannot interpret. `bits ∈ {1,2,4}` is already
+    // validated above, so neither divisor is zero.
+    let n_buckets = 1usize << bits;
+    if dim % n_buckets != 0 {
+        return Err(invalid(format!(
+            "TVRQ dim {dim} is not a multiple of 2^bits = {n_buckets}; \
+             constant-composition invariant violated"
+        )));
+    }
+    let codes_per_byte = (8 / bits) as usize;
+    if dim % codes_per_byte != 0 {
+        return Err(invalid(format!(
+            "TVRQ dim {dim} is not a multiple of codes_per_byte = {codes_per_byte}"
+        )));
+    }
     let mut n_buf = [0u8; 4];
     f.read_exact(&mut n_buf)?;
     let n_vectors = u32::from_le_bytes(n_buf) as usize;
