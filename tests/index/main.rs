@@ -28,6 +28,7 @@ mod bitmap;
 mod fastscan;
 mod rank;
 // `MultiBucketBitmap` is gated behind the `experimental` feature.
+mod finite;
 #[cfg(feature = "experimental")]
 mod multi_bucket;
 mod quant;

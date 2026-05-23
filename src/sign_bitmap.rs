@@ -74,6 +74,7 @@ impl SignBitmap {
     /// exactly zero (rare in practice for trained embeddings) is
     /// treated as negative (bit unset).
     pub fn add(&mut self, vectors: &[f32]) {
+        crate::util::assert_all_finite(vectors);
         let n = vectors.len() / self.dim;
         assert_eq!(vectors.len(), n * self.dim);
         let qpv = self.qwords_per_vec;
@@ -97,6 +98,7 @@ impl SignBitmap {
     /// [`Self::add`]: bit j set iff `q[j] > 0.0`.
     pub fn build_query_bitmap(&self, q: &[f32]) -> Vec<u64> {
         assert_eq!(q.len(), self.dim);
+        crate::util::assert_all_finite(q);
         let mut bm = vec![0u64; self.qwords_per_vec];
         for j in 0..self.dim {
             if q[j] > 0.0 {

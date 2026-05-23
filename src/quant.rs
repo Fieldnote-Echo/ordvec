@@ -23,7 +23,7 @@ use crate::rank::{
     bucket_centre, bucket_ranks, pack_buckets, rank_to_bucket, rank_transform,
     rankquant_bytes_per_vec, rankquant_norm,
 };
-use crate::util::{l2_normalise, result_buffer_len, TopK};
+use crate::util::{assert_all_finite, l2_normalise, result_buffer_len, TopK};
 use crate::SearchResults;
 
 /// `B`-bit RankQuant index.
@@ -151,6 +151,7 @@ impl RankQuant {
             n * self.dim,
             "vectors length must be a multiple of dim",
         );
+        assert_all_finite(vectors);
         let bytes_per_vec = rankquant_bytes_per_vec(self.dim, self.bits);
         let start = self.packed.len();
         self.packed.resize(start + n * bytes_per_vec, 0);
@@ -173,6 +174,7 @@ impl RankQuant {
     pub fn search(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
+        assert_all_finite(queries);
         // Clamp the user's `k` to `n_vectors` before it sizes any
         // `vec![_; nq * k]` allocation below. An unclamped `usize::MAX`
         // otherwise aborts the process with `capacity overflow`.
@@ -243,6 +245,7 @@ impl RankQuant {
     pub fn search_asymmetric(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
+        assert_all_finite(queries);
         // Clamp `k` to `n_vectors` before sizing any `vec![_; nq * k]`
         // allocation; `usize::MAX` otherwise aborts with capacity
         // overflow.
@@ -402,16 +405,6 @@ impl RankQuant {
         last
     }
 
-    /// Single-query asymmetric scoring restricted to a candidate
-    /// subset (e.g., the top-M from a bitmap probe). Returns the
-    /// top-`k` *candidate* indices (i.e., positions in `candidates`,
-    /// not global doc IDs) and their scores. Caller is expected to
-    /// map back to global IDs.
-    ///
-    /// Uses the same AVX-512 → AVX2 → scalar dispatch as
-    /// [`Self::search_asymmetric`] and the same centre-drop math, just
-    /// iterates over the provided candidate list instead of all `n`
-    /// documents. Allocates nothing per-doc.
     /// Persist to a `.tvrq` file. Format: 14-byte header + packed bytes.
     pub fn write(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         crate::rank_io::write_rankquant(path, self.bits, self.dim, self.n_vectors, &self.packed)
@@ -462,6 +455,23 @@ impl RankQuant {
         })
     }
 
+    /// Single-query asymmetric scoring restricted to a candidate
+    /// subset (e.g., the top-M from a bitmap probe). Returns the
+    /// top-`k` *candidate* indices (i.e., positions in `candidates`,
+    /// not global doc IDs) and their scores. Caller is expected to
+    /// map back to global IDs.
+    ///
+    /// Uses the same AVX-512 → AVX2 → scalar dispatch as
+    /// [`Self::search_asymmetric`] and the same centre-drop math, just
+    /// iterates over the provided candidate list instead of all `n`
+    /// documents.
+    ///
+    /// The candidate docs are gathered into a contiguous scratch buffer
+    /// (`m * bytes_per_vec`) before the SIMD scan — negligible for the
+    /// intended small/medium candidate sets (`M` ≈ 100–500 from a bitmap
+    /// probe), but the copy grows linearly in `M`. For very large `M`
+    /// (e.g. misuse via FFI), a full [`Self::search_asymmetric`] may be
+    /// cheaper; a gather-free in-place scan is tracked for the FFI work.
     pub fn search_asymmetric_subset(
         &self,
         query: &[f32],
@@ -469,6 +479,7 @@ impl RankQuant {
         k: usize,
     ) -> (Vec<f32>, Vec<i64>) {
         assert_eq!(query.len(), self.dim);
+        assert_all_finite(query);
         // Bounds-check candidate ids before the gather below indexes
         // `self.packed[src..src + bpv]` with `src = di * bpv`. An OOB id
         // otherwise surfaces as a cryptic slice-range panic; fail fast
@@ -485,6 +496,9 @@ impl RankQuant {
         let n_buckets = 1usize << bits;
         let m = candidates.len();
         let k_eff = k.min(m);
+        if k_eff == 0 {
+            return (Vec::new(), Vec::new());
+        }
 
         let norm = rankquant_norm(dim, bits);
         let inv_norm = 1.0_f32 / norm;
