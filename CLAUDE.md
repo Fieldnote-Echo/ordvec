@@ -91,5 +91,6 @@ SDE (Sapphire Rapids) so the AVX-512 kernels are actually exercised on hosted ru
   every finding (fix / defer-to-issue / explain-as-non-issue), then resolve the remediated
   review threads (`gh api graphql` `resolveReviewThread`) and reply on deferred ones with the
   tracking issue.
-- Durable project facts: `~/.claude/projects/-home-ndspence-GitHub-ordvec/memory/` (MEMORY.md
-  index). The broader REO / paper / portfolio context lives in the turbovec project memory.
+- Durable project facts live in this repository's local Claude project memory
+  (`MEMORY.md` index); do not commit machine-specific memory paths. The broader
+  REO / paper / portfolio context lives in the turbovec project memory.
