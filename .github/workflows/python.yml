@@ -49,10 +49,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # abi3-py39 means one wheel covers 3.9+; test the min and max we claim,
-        # on x86_64 (ubuntu) and aarch64 (macos, scalar SIMD fallback).
-        os: [ubuntu-latest, macos-latest]
-        python: ["3.9", "3.13"]
+        # release-python.yml builds one wheel per platform; this matrix makes
+        # sure every one of those targets is *behaviourally* tested (build →
+        # install → pytest), not merely compiled. abi3 means a single wheel
+        # covers all CPython 3.9+, so the python axis only needs its 3.9↔3.13
+        # floor/ceiling checked once (linux/x86_64); the other targets exercise
+        # the native code on 3.13. The aarch64 runners (ubuntu-24.04-arm,
+        # macos-latest) are what exercise the NEON kernels through the bindings.
+        # NB: ubuntu-24.04-arm hosted runners are free on public repos / paid
+        # plans; until this repo is public the ARM leg may queue or bill.
+        include:
+          - { os: ubuntu-latest, python: "3.9" } # linux x86_64 — abi3 floor
+          - { os: ubuntu-latest, python: "3.13" } # linux x86_64 — abi3 ceiling
+          - { os: ubuntu-24.04-arm, python: "3.13" } # linux aarch64 — NEON
+          - { os: macos-latest, python: "3.13" } # macOS arm64 — NEON
+          - { os: macos-13, python: "3.13" } # macOS x86_64 (Intel)
+          - { os: windows-latest, python: "3.13" } # windows x64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
