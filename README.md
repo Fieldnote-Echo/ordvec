@@ -43,7 +43,7 @@ cargo run --release --example bench_rank
 ```
 
 A committed capture of one run lives at
-[`benchmarks/rank_modes_results.txt`](benchmarks/rank_modes_results.txt).
+[`benchmarks/rank_modes_results.txt`](https://github.com/Fieldnote-Echo/ordvec/blob/v0.2.0/benchmarks/rank_modes_results.txt).
 
 ## License
 

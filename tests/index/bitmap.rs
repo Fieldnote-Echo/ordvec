@@ -94,8 +94,7 @@ fn bitmap_top_m_candidates_uses_no_ground_truth() {
 
 #[test]
 fn bitmap_top_m_candidates_deterministic_at_ties() {
-    // Body-kernel tie-break regression (see
-    // FOLLOWUP_BODY_KERNEL_TIE_BREAK.md): with composite-key
+    // Body-kernel tie-break regression: with composite-key
     // partition `(score desc, doc_id asc)`, candidate selection is
     // deterministic even when many docs share the same bitmap-overlap
     // score at the cutoff. Construct a corpus where most docs have

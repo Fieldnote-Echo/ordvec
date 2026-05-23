@@ -11,14 +11,22 @@ readme = "README.md"
 keywords = ["vector-search", "quantization", "nearest-neighbor", "ann", "simd"]
 categories = ["algorithms", "science", "compression"]
 
-# docs.rs build configuration. Build with default features only so the
-# experimental research scaffold (MultiBucketBitmap) and the
-# `#[doc(hidden)]` FastScan path stay off the published docs surface.
-# `--cfg docsrs` lets the crate gate `#[doc(cfg(...))]` annotations on a
-# build flag docs.rs sets but a normal `cargo doc` does not.
+# Keep dev/internal files out of the published crate — they stay in the repo
+# but aren't useful to crate consumers.
+exclude = [
+    ".github/",
+    ".gitignore",
+    "CLAUDE.md",
+    "deny.toml",
+    "docs/ALTERNATIVES_CONSIDERED.md",
+    "docs/FOLLOWUP_BODY_KERNEL_TIE_BREAK.md",
+]
+
+# docs.rs build configuration: build with default features only, so the
+# experimental MultiBucketBitmap scaffold stays off the published docs.
+# (The `#[doc(hidden)]` FastScan path is hidden by its attribute either way.)
 [package.metadata.docs.rs]
 all-features = false
-rustdoc-args = ["--cfg", "docsrs"]
 
 [dependencies]
 rayon = "1.10"
