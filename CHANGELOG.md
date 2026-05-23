@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 _No unreleased changes yet._
 
+## [0.2.0] - 2026-05-22
+
+OrdVec ontology rebrand: index types drop the `Index` suffix; the `rank_index`
+module is renamed to `index`. Deprecated `*Index` aliases are retained for
+back-compat.
+
+### Changed
+
+- **Type renames** — the `Index` suffix was dropped across the ordinal family:
+  `RankIndex` → `Rank`, `RankQuantIndex` → `RankQuant`,
+  `BitmapIndex` → `Bitmap`, `SignBitmapIndex` → `SignBitmap`,
+  `MultiBucketBitmapIndex` → `MultiBucketBitmap`,
+  `RankQuantFastscanIndex` → `RankQuantFastscan`.
+- **Module rename** — `ordvec::rank_index` → `ordvec::index`; the test
+  tree mirrors this (`tests/rank_index/` → `tests/index/`).
+- **Crate version** bumped to `0.2.0`.
+
+### Deprecated
+
+Pre-0.2 names retained as deprecated `pub use` aliases in `src/lib.rs`:
+`RankIndex`, `RankQuantIndex`, `BitmapIndex`, `SignBitmapIndex`,
+`MultiBucketBitmapIndex` (gated `#[cfg(feature = "experimental")]`),
+`RankQuantFastscanIndex` (gated `#[doc(hidden)]`).
+Remove these aliases in a future release.
+
 ## [0.1.0] - 2026-05-22
 
 Initial release. `ordvec` is the training-free ordinal & sign quantization
