@@ -40,7 +40,7 @@
 use rayon::prelude::*;
 
 use crate::rank::{bucket_ranks, rank_transform, rankquant_norm};
-use crate::util::{l2_normalise, result_buffer_len, TopK};
+use crate::util::{assert_all_finite, l2_normalise, result_buffer_len, TopK};
 use crate::SearchResults;
 
 // -------------------------------------------------------------------
@@ -495,6 +495,7 @@ pub(crate) fn search_asymmetric_fastscan_b2(
 /// path, not part of the headline API. Prefer
 /// [`RankQuant`](crate::RankQuant) unless you have
 /// measured FastScan to win on your workload.
+#[doc(hidden)]
 pub struct RankQuantFastscan {
     dim: usize,
     n_vectors: usize,
@@ -524,6 +525,7 @@ impl RankQuantFastscan {
     /// - Panics on incremental extend (v1 single-shot limitation —
     ///   see the type's doc comment).
     pub fn add(&mut self, vectors: &[f32]) {
+        assert_all_finite(vectors);
         let n = vectors.len() / self.dim;
         assert_eq!(
             vectors.len(),
@@ -556,6 +558,7 @@ impl RankQuantFastscan {
     /// [`RankQuant::search_asymmetric`](crate::RankQuant::search_asymmetric)
     /// at b=2, within 8-bit LUT quantization noise.
     pub fn search(&self, queries: &[f32], k: usize) -> SearchResults {
+        assert_all_finite(queries);
         // (dim, n_vectors, packed_fs.len()) consistent by construction.
         search_asymmetric_fastscan_b2(&self.packed_fs, self.n_vectors, self.dim, queries, k)
     }

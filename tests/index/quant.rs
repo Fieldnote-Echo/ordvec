@@ -147,3 +147,37 @@ fn rank_io_round_trip_rankquant_index() {
     let r2 = loaded.search_asymmetric(&q, 10);
     assert_eq!(r1.indices_for_query(0), r2.indices_for_query(0));
 }
+
+#[test]
+fn rankquant_asymmetric_correct_on_simd_invalid_dims() {
+    // Constructor-valid dims that are NOT multiples of the SIMD lane
+    // widths, so `select_simd_tier` must route them away from a kernel
+    // that would otherwise drop the trailing chunk. (48,4)/(80,2) fall
+    // to AVX2; (20,2)/(36,2) fall all the way to the scalar LUT
+    // (dim % 64 != 0 and dim % 16 != 0). Each must still agree with the
+    // scalar reference — this is the regression guard for the dispatch
+    // logic that exists precisely to protect these dimensions.
+    for &(dim, bits) in &[(48usize, 4u8), (80, 2), (20, 2), (36, 2)] {
+        let n = 40usize;
+        let mut rng = ChaCha8Rng::seed_from_u64(900 + dim as u64 * 8 + bits as u64);
+        let corpus: Vec<f32> = (0..n * dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let mut idx = RankQuant::new(dim, bits);
+        idx.add(&corpus);
+
+        let query: Vec<f32> = (0..dim).map(|_| rng.gen_range(-1.0..1.0)).collect();
+        let res = idx.search_asymmetric(&query, 10);
+
+        let ref_scores: Vec<f32> = (0..n)
+            .map(|di| ref_rankquant_asymmetric(&query, &corpus[di * dim..(di + 1) * dim], bits))
+            .collect();
+        for slot in 0..10 {
+            let di = res.indices_for_query(0)[slot] as usize;
+            let s = res.scores_for_query(0)[slot];
+            assert!(
+                (s - ref_scores[di]).abs() < 1e-4,
+                "dim={dim} bits={bits} slot {slot} doc {di}: {s} vs {}",
+                ref_scores[di],
+            );
+        }
+    }
+}

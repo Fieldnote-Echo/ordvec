@@ -24,7 +24,7 @@
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;
 
-use crate::util::{l2_normalise, result_buffer_len, TopK};
+use crate::util::{assert_all_finite, l2_normalise, result_buffer_len, TopK};
 use crate::SearchResults;
 
 /// Compute the dimension-wise rank transform of a single vector.
@@ -37,6 +37,7 @@ use crate::SearchResults;
 pub fn rank_transform(v: &[f32]) -> Vec<u16> {
     let d = v.len();
     assert!(d <= u16::MAX as usize, "dim must fit in u16");
+    assert_all_finite(v);
     let mut order: Vec<u16> = (0..d as u16).collect();
     order.sort_by_key(|&i| OrderedFloat(v[i as usize]));
     let mut ranks = vec![0u16; d];
@@ -53,6 +54,7 @@ pub fn rank_transform_into(v: &[f32], out: &mut [u16]) {
     let d = v.len();
     assert_eq!(d, out.len(), "out must have the same length as v");
     assert!(d <= u16::MAX as usize, "dim must fit in u16");
+    assert_all_finite(v);
     let mut order: Vec<u16> = (0..d as u16).collect();
     order.sort_by_key(|&i| OrderedFloat(v[i as usize]));
     for (rank, &orig_idx) in order.iter().enumerate() {
@@ -139,6 +141,11 @@ pub fn rankquant_bytes_per_vec(d: usize, bits: u8) -> usize {
     // integral codes-per-byte.
     assert!(matches!(bits, 1 | 2 | 4), "bits must be 1,2,4");
     let codes_per_byte = (8 / bits) as usize;
+    assert_eq!(
+        d % codes_per_byte,
+        0,
+        "d ({d}) must be a multiple of codes_per_byte ({codes_per_byte}) for bits = {bits}"
+    );
     d / codes_per_byte
 }
 
@@ -223,6 +230,7 @@ impl Rank {
             n * self.dim,
             "vectors length must be a multiple of dim",
         );
+        assert_all_finite(vectors);
         let start = self.ranks.len();
         self.ranks.resize(start + n * self.dim, 0);
         let dim = self.dim;
@@ -244,6 +252,7 @@ impl Rank {
     pub fn search(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
+        assert_all_finite(queries);
         // Clamp `k` to `n_vectors` before it sizes the `vec![_; nq * k]`
         // result buffers; an unclamped `usize::MAX` aborts the process
         // with `capacity overflow`.
@@ -308,6 +317,7 @@ impl Rank {
     pub fn search_asymmetric(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
+        assert_all_finite(queries);
         // Clamp `k` to `n_vectors` before sizing the `vec![_; nq * k]`
         // result buffers; `usize::MAX` otherwise aborts with capacity
         // overflow.

@@ -20,7 +20,7 @@
 use rayon::prelude::*;
 
 use crate::rank::rank_transform;
-use crate::util::{result_buffer_len, TopK};
+use crate::util::{assert_all_finite, result_buffer_len, TopK};
 use crate::SearchResults;
 
 /// Top-bucket bitmap index for constant-composition coarse scoring.
@@ -53,6 +53,7 @@ impl Bitmap {
     pub fn add(&mut self, vectors: &[f32]) {
         let n = vectors.len() / self.dim;
         assert_eq!(vectors.len(), n * self.dim);
+        assert_all_finite(vectors);
         let qpv = self.qwords_per_vec;
         let cutoff = (self.dim - self.n_top) as u16;
         let start = self.bitmaps.len();
@@ -78,6 +79,7 @@ impl Bitmap {
     /// the query side never gets rank-quantised.
     pub fn build_query_bitmap_fp32(&self, q: &[f32]) -> Vec<u64> {
         assert_eq!(q.len(), self.dim);
+        assert_all_finite(q);
         // Index the dim sorted by |q[j]| desc; alternative: by q[j] desc.
         // We use raw value desc so the top bits flag where the query
         // points positively, matching the doc-side semantics.
@@ -100,6 +102,7 @@ impl Bitmap {
     pub fn search(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
         assert_eq!(queries.len(), nq * self.dim);
+        assert_all_finite(queries);
         // Clamp the user `k` to n_vectors BEFORE it sizes any
         // allocation. `vec![_; nq * k]` with an unclamped `k` (e.g.
         // usize::MAX) overflows Vec capacity and aborts. There can
@@ -155,6 +158,7 @@ impl Bitmap {
     /// top-`m`: O(N + m log m). The 828 KiB temp at N=207k is
     /// cheap relative to the cost it saves at M ≥ 1000.
     pub fn top_m_candidates(&self, q: &[f32], m: usize) -> Vec<u32> {
+        assert_all_finite(q);
         let m_eff = m.min(self.n_vectors);
         if m_eff == 0 {
             return Vec::new();
@@ -201,6 +205,7 @@ impl Bitmap {
         let dim = self.dim;
         let batch = queries.len() / dim;
         assert_eq!(queries.len(), batch * dim);
+        assert_all_finite(queries);
         let m_eff = m.min(self.n_vectors);
         if batch == 0 || m_eff == 0 {
             return vec![Vec::new(); batch];
@@ -219,9 +224,11 @@ impl Bitmap {
         }
 
         // One doc-scan pass writes `batch * n` u32 scores, layout
-        // scores[bi * n + di]. At B=8, N=207k this is 6.6 MB — fits
-        // in L2 per worker if rayon dispatches batch-sized chunks
-        // to separate workers.
+        // scores[bi * n + di]. At B=8, N=207k that buffer is ~6.6 MB —
+        // L3-resident, not per-core L2. The parallel select_nth below
+        // streams one query's ~828 KiB score slice per worker; it backs
+        // from L3, but the selection is a single linear pass, so it stays
+        // bandwidth-bound rather than thrashing a small cache.
         let mut scores = vec![0u32; batch * n];
         bitmap_scan_collect_batched(&self.bitmaps, n, qpv, &q_batch, batch, &mut scores);
 

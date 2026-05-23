@@ -71,6 +71,7 @@ impl MultiBucketBitmap {
     pub fn add(&mut self, vectors: &[f32]) {
         let n = vectors.len() / self.dim;
         assert_eq!(vectors.len(), n * self.dim);
+        crate::util::assert_all_finite(vectors);
         let qpb = self.qwords_per_bitmap;
         let nb = self.n_buckets;
         let per_doc = nb * qpb;
@@ -96,6 +97,7 @@ impl MultiBucketBitmap {
     /// scoring and bucket-overlap probes.
     pub fn query_bitmaps_from_ranks(&self, q: &[f32]) -> Vec<u64> {
         assert_eq!(q.len(), self.dim);
+        crate::util::assert_all_finite(q);
         let qpb = self.qwords_per_bitmap;
         let nb = self.n_buckets;
         let bits = self.bits;

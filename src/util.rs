@@ -35,6 +35,22 @@ pub(crate) fn l2_normalise(v: &[f32]) -> Vec<f32> {
     }
 }
 
+/// Assert that every element of `v` is finite (no `NaN`, no `±Inf`).
+///
+/// ordvec's public `add` / `search` entry points reject non-finite
+/// inputs fail-fast: the rank transform's ordering and the
+/// constant-composition invariants are only well-defined on finite
+/// embeddings (a `NaN` would otherwise sort nondeterministically across
+/// the rank and bitmap query paths). The Python FFI is expected to
+/// validate separately; this is the Rust-side backstop.
+#[inline]
+pub(crate) fn assert_all_finite(v: &[f32]) {
+    assert!(
+        v.iter().all(|x| x.is_finite()),
+        "ordvec: input contains non-finite (NaN or ±Inf) values; embeddings must be finite"
+    );
+}
+
 /// Running top-`k` collector.
 ///
 /// Maintains an unsorted array of the best `k` (score, index) pairs
