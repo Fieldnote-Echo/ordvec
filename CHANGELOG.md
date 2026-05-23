@@ -12,8 +12,10 @@ _No unreleased changes yet._
 ## [0.2.0] - 2026-05-22
 
 OrdVec ontology rebrand: index types drop the `Index` suffix; the `rank_index`
-module is flattened into the crate root. Deprecated `*Index` aliases are
-retained for back-compat.
+module is flattened into the crate root. Root-level `*Index` aliases are
+retained as deprecated shims, but the old `ordvec::rank_index::*` module path
+is removed (breaking for module-path imports; pre-release cleanup, crate
+unpublished).
 
 ### Changed
 
@@ -29,11 +31,21 @@ retained for back-compat.
 
 ### Deprecated
 
-Pre-0.2 names retained as deprecated `pub use` aliases in `src/lib.rs`:
-`RankIndex`, `RankQuantIndex`, `BitmapIndex`, `SignBitmapIndex`,
+Pre-0.2 names retained as deprecated `pub type` aliases at the crate root (in
+`src/lib.rs`): `RankIndex`, `RankQuantIndex`, `BitmapIndex`, `SignBitmapIndex`,
 `MultiBucketBitmapIndex` (gated `#[cfg(feature = "experimental")]`),
-`RankQuantFastscanIndex` (gated `#[doc(hidden)]`).
-Remove these aliases in a future release.
+`RankQuantFastscanIndex` (gated `#[doc(hidden)]`). These cover root imports
+(`use ordvec::RankIndex;`) only — not the removed module path (below). Remove
+these aliases in a future release.
+
+### Removed
+
+- **`ordvec::rank_index::*` module path** — the public `rank_index` module was
+  removed by the flatten, so module-path imports
+  (`use ordvec::rank_index::RankQuantIndex;`) no longer resolve. Move to the
+  crate-root names (`use ordvec::RankQuant;`) or the deprecated root aliases
+  above. Done as pre-release cleanup while the crate is unpublished, so the
+  published vocabulary is clean before 0.2.0 is the first release people see.
 
 ## [0.1.0] - 2026-05-22
 

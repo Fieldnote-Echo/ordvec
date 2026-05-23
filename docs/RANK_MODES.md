@@ -75,7 +75,7 @@ The three scored index families are:
   (`dim * bits / 8` bytes per document). Supported `bits ∈ {1, 2, 4}`.
 - **`Bitmap`** / **`SignBitmap`** — one bit per coordinate
   (`dim / 8` bytes per document); the cheap candidate-gen front end for
-  the two-stage path (see [README](../README.md#substrate-families)).
+  the two-stage path (see [README](../README.md#ordinal-index-family)).
 
 Both `Rank` and `RankQuant` expose `search` (symmetric:
 rank-vs-rank, Spearman correlation) and `search_asymmetric` (FP32

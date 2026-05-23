@@ -7,7 +7,7 @@
 //! no system dependencies — no BLAS, no `ndarray`, no `faer` — and needs
 //! no training, rotation, or codebook. Norms are analytical.
 //!
-//! Three substrate families, all data-oblivious:
+//! Four substrate families, all data-oblivious:
 //!
 //! - [`Rank`] stores full-precision rank vectors (`u16` per
 //!   coordinate, `2 * dim` bytes per document).

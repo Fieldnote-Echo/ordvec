@@ -1,9 +1,10 @@
-//! Read/write rank-mode index files.
+//! Read/write ordinal/sign index files.
 //!
-//! Three formats live here, each self-describing via a 4-byte magic:
-//! * `.tvr`  — [`Rank`](crate::Rank)        — magic `TVR1`
+//! Four formats live here, each self-describing via a 4-byte magic:
+//! * `.tvr`  — [`Rank`](crate::Rank) — magic `TVR1`
 //! * `.tvrq` — [`RankQuant`](crate::RankQuant) — magic `TVRQ`
-//! * `.tvbm` — [`Bitmap`](crate::Bitmap)    — magic `TVBM`
+//! * `.tvbm` — [`Bitmap`](crate::Bitmap) — magic `TVBM`
+//! * `.tvsb` — [`SignBitmap`](crate::SignBitmap) — magic `TVSB`
 //!
 //! All formats are little-endian. Headers are small fixed-size structs
 //! followed by a single contiguous payload (the rank / packed / bitmap
