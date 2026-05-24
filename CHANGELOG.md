@@ -50,8 +50,10 @@ these aliases in a future release.
 ## [0.1.0] - 2026-05-22
 
 Initial release. `ordvec` is the training-free ordinal & sign quantization
-substrate for vector retrieval, extracted as a standalone crate from
-[turbovec](https://github.com/RyanCodrai/turbovec). It is data-oblivious (no
+substrate for vector retrieval — original work by Nelson Spence, developed
+within the [turbovec](https://github.com/RyanCodrai/turbovec) project (MIT,
+by Ryan Codrai) and factored out here as a standalone crate. It is
+data-oblivious (no
 training, rotation, or codebook), uses analytical norms, and carries **no
 system dependencies** — no BLAS, no `ndarray`, no `faer`.
 
@@ -79,7 +81,7 @@ system dependencies** — no BLAS, no `ndarray`, no `faer`.
 - Reproducible in-process benchmark (`examples/bench_rank.rs`,
   `cargo run --release --example bench_rank`) generating a seeded synthetic
   corpus, with a committed capture in `benchmarks/rank_modes_results.txt`.
-- Red-team regression suites (alpha/beta/gamma/delta) ported from turbovec.
+- Red-team regression suites (alpha/beta/gamma/delta) for the rank-mode substrate.
 
 ### Notes
 
@@ -87,5 +89,6 @@ system dependencies** — no BLAS, no `ndarray`, no `faer`.
   AVX-512 intrinsics this crate relies on were stabilized.
 - Dual-licensed under **MIT OR Apache-2.0**.
 
-[Unreleased]: https://github.com/Fieldnote-Echo/ordvec/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/Fieldnote-Echo/ordvec/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/Fieldnote-Echo/ordvec/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/Fieldnote-Echo/ordvec/releases/tag/v0.1.0

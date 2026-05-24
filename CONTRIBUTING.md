@@ -1,0 +1,64 @@
+# Contributing to ordvec
+
+Thanks for your interest! `ordvec` is a training-free ordinal & sign
+vector-quantization crate, and it underpins the OrdVec / RankQuant paper
+(ordinal retrieval as a third category peer to dense and sparse).
+Contributions to the code, the docs, and the paper are all welcome.
+
+## Ground rules
+
+- **No system dependencies in the core crate.** No BLAS, OpenBLAS, faer,
+  ndarray, or statrs in `ordvec`. CI enforces this (the `deps` job greps the
+  dependency tree). The `ordvec-python` binding legitimately pulls `ndarray`
+  via rust-numpy — that's fine; the guard is scoped to the core crate.
+- **No fabricated benchmarks.** The only in-repo benchmark is the
+  reproducible `examples/bench_rank` synthetic run. Real-corpus numbers are
+  user-runnable and reported in the paper — please don't add unverifiable
+  performance claims.
+- **MSRV is Rust 1.89.** Don't use newer standard-library or language APIs.
+- **Stable surface.** The persistence file magics (`.tvr` / `.tvrq` /
+  `.tvbm` / `.tvsb`) and the public method names
+  (`new` / `add` / `search` / `search_asymmetric*` / `top_m_candidates*` /
+  `write` / `load`) are stable — please don't rename them.
+
+## The gate (run before opening a PR — mirrors CI)
+
+```sh
+cargo fmt --all --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo test                            # default surface
+cargo test --features experimental
+cargo test --no-default-features
+cargo +1.89.0 build                   # MSRV
+cargo build --locked
+RUSTFLAGS="-D warnings" cargo build
+cargo deny check                      # licenses / advisories / bans / sources
+```
+
+SIMD dispatches at runtime — AVX-512 / AVX2 on x86_64, NEON on aarch64,
+simd128 on wasm32, and a scalar fallback elsewhere. If you change a SIMD
+kernel, the AVX-512 path is exercised in CI under Intel SDE; locally, run on
+an AVX-512 host or via SDE.
+
+### Python bindings (`ordvec-python/`)
+
+```sh
+cargo fmt -p ordvec-python --check
+cargo clippy -p ordvec-python --all-targets -- -D warnings
+maturin develop && pytest ordvec-python/tests   # in a virtualenv
+```
+
+## Workflow
+
+- **Branches:** `<type>/<slug>` (feat, fix, refactor, docs, test, chore,
+  perf, ci).
+- **Commits:** `<type>: <description>`.
+- Update `CHANGELOG.md` under `[Unreleased]` for any user-facing change.
+- Open a PR against `main` and fill in the PR template checklist.
+- For larger changes, open an issue (or a Discussion) first so we can agree
+  the approach before you invest time.
+
+## Licensing
+
+By contributing, you agree that your contributions are dual-licensed under
+**MIT OR Apache-2.0**, matching the project.

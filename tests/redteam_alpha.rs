@@ -1,9 +1,8 @@
-//! Red-team hardening regression suite (ported from turbovec).
+//! Red-team hardening regression suite for the rank-mode substrate.
 //!
-//! Each test pins a specific robustness fix in the `rank_index` family.
-//! These cases were extracted from turbovec's `redteam_alpha.rs`; only
-//! the rank-relevant cases (the substrate that lives in `ordvec`) are
-//! kept. The `MultiBucketBitmap` cases are gated behind the
+//! Each test pins a specific robustness fix in the rank-mode family.
+//! Only the rank-relevant cases (the substrate that lives in `ordvec`)
+//! are kept. The `MultiBucketBitmap` cases are gated behind the
 //! `experimental` feature because that type is not on the default
 //! public surface.
 //!

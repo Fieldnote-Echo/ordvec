@@ -1,8 +1,7 @@
-//! Red-team hardening tests (ported from turbovec).
+//! Red-team hardening tests for the rank-mode substrate.
 //!
-//! Each test pins a robustness fix to a concrete failure mode. These
-//! cases were extracted from turbovec's `redteam_beta.rs`; all of them
-//! exercise the rank-mode substrate (`Rank`, `RankQuant`,
+//! Each test pins a robustness fix to a concrete failure mode. All of
+//! them exercise the rank-mode substrate (`Rank`, `RankQuant`,
 //! `SignBitmap`, and the byte-LUT bench helper) that lives in
 //! `ordvec`.
 //!

@@ -24,13 +24,11 @@
 //!
 //! # Provenance
 //!
-//! Ported from the turbovec `rank-modes` monolith
-//! (`turbovec/src/rank_index.rs`, tag
-//! `archive/rank-modes-fastscan-src-20260522`). Source commits:
-//! `d5838c1` (b=2 kernel), `be0fae2` (type wrapper + `checked_mul`
-//! overflow guard), `a46e2d2` (input validation + hide-from-rustdoc),
-//! `c4fd4d6` (k==0 short-circuit), `e08506d` (independent feature-
-//! detection dispatch). Integrated against ordvec's decomposed,
+//! This FastScan path consolidates the author's earlier `rank-modes`
+//! development (originally a single `rank_index.rs` module): the b=2
+//! kernel, the type wrapper with a `checked_mul` overflow guard, input
+//! validation, the `k == 0` short-circuit, and independent
+//! feature-detection dispatch. Integrated against ordvec's decomposed,
 //! hardened `quant`/`util` modules: result buffers are sized through
 //! [`result_buffer_len`](crate::util::result_buffer_len) (overflow-
 //! safe `nq * k`), queries are normalised through the shared

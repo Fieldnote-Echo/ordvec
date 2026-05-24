@@ -7,3 +7,9 @@
 *.tvbm
 *.tvsb
 *.npy
+
+# Local Claude Code project context & agent worktrees — kept out of the
+# public repo (internal working notes). The public contributor guide lives
+# in CONTRIBUTING.md.
+/CLAUDE.md
+/.claude/

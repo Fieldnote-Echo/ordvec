@@ -8,7 +8,7 @@
 #
 # No system dependencies are required — ordvec links no BLAS.
 #
-# Source: ordvec/examples/bench_rank.rs (extracted from turbovec, MIT)
+# Source: ordvec/examples/bench_rank.rs
 # Corpus: SYNTHETIC low-rank clustered corpus, seed = 1 (CORPUS_SEED), in-process.
 # Config: dim=256  n=30000  queries=200  k=10  (the self-contained default).
 # Hardware class: x86_64 desktop, AMD Ryzen 9 9950X (AVX-512), 32 rayon threads.
