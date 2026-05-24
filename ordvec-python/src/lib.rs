@@ -8,7 +8,7 @@
 //! The core crate is aliased as `ordvec_core` throughout, so the Rust namespace
 //! never collides with the `ordvec` Python package name.
 //!
-//! Provenance: original work by Nelson Spence, developed within turbovec
+//! Provenance: developed within turbovec
 //! (MIT, by Ryan Codrai), factored out. Dual-licensed MIT OR Apache-2.0.
 //!
 //! Every FFI entry point validates its inputs at the boundary so the core's

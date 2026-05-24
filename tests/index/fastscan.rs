@@ -7,8 +7,8 @@
 //! (top-10 parity with the exact RankQuant b=2 kernel; k==0 short-
 //! circuit) plus the audit-coverage suite (empty corpus, empty query,
 //! k>N, thread-safe, dim-boundary matrix, second-add panic, metadata
-//! roundtrip) ported from the turbovec `rank-modes` source
-//! (`b4a57b2`, `c4fd4d6`).
+//! roundtrip) carried over from the author's earlier rank-modes
+//! development.
 
 use std::sync::Arc;
 use std::thread;

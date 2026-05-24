@@ -1,10 +1,10 @@
-//! Red-team / robustness tests (ported from turbovec).
+//! Red-team / robustness tests for the rank-mode substrate.
 //!
-//! Only the `rank.rs` domain-guard cases are ported here. The original
-//! turbovec `redteam_gamma.rs` also covered `TurboQuantIndex::new`,
-//! `IdMapIndex::add_with_ids*`, and `io::read_core` — none of which
-//! exist in `ordvec` (it carries only the ordinal/sign substrate), so
-//! those cases are intentionally dropped.
+//! Only the `rank.rs` domain-guard cases are kept here. The earlier
+//! rank-modes red-team suite also covered a quantized-index
+//! constructor, id-map `add_with_ids*`, and a core `io` read path —
+//! none of which exist in `ordvec` (it carries only the ordinal/sign
+//! substrate), so those cases are intentionally dropped.
 //!
 //! * `P-B` / `P-E` — `rank::rank_to_bucket` overflow on `bits >= 32` and
 //!   div-by-zero on `d == 0`.

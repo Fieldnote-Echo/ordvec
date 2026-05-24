@@ -1,11 +1,9 @@
-//! Red-team hardening tests for the rank-mode loaders (ported from
-//! turbovec).
+//! Red-team hardening tests for the rank-mode loaders.
 //!
 //! These exercise two deserialization gaps at the `rank_io::*` layer.
-//! Ported verbatim from turbovec's `redteam_delta.rs`; that suite was
-//! already rank-only (no FFI/pyo3 cases), so the full set carries over.
-//! The `extern crate blas_src;` line is dropped because `ordvec` has no
-//! BLAS dependency.
+//! The suite is rank-only (no FFI/pyo3 cases). The earlier rank-modes
+//! build's `extern crate blas_src;` line is omitted because `ordvec`
+//! has no BLAS dependency.
 //!
 //! * **TV-DESER-004** — [`rank_io::load_rankquant`] validated `bits`
 //!   but not the `dim % (1 << bits) == 0` / `dim % (8 / bits) == 0`

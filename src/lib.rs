@@ -1,6 +1,6 @@
 //! Training-free ordinal & sign quantization for vector retrieval.
 //!
-//! `ordvec` is an original training-free ordinal/sign retrieval
+//! `ordvec` is a training-free ordinal/sign retrieval
 //! substrate, developed within the
 //! [turbovec](https://github.com/RyanCodrai/turbovec) project (MIT, by
 //! Ryan Codrai) and factored out here as a standalone crate. It carries

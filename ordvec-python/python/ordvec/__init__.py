@@ -1,6 +1,6 @@
 """ordvec — training-free ordinal & sign vector quantization (Python bindings).
 
-Original work by Nelson Spence, developed within the turbovec project
+Developed within the turbovec project
 (MIT, by Ryan Codrai) and factored out. Dual-licensed MIT OR Apache-2.0.
 
 Public API: ``Rank``, ``RankQuant``, ``Bitmap``, ``SignBitmap``.
