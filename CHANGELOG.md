@@ -50,10 +50,9 @@ these aliases in a future release.
 ## [0.1.0] - 2026-05-22
 
 Initial release. `ordvec` is the training-free ordinal & sign quantization
-substrate for vector retrieval — original work by Nelson Spence, developed
-within the [turbovec](https://github.com/RyanCodrai/turbovec) project (MIT,
-by Ryan Codrai) and factored out here as a standalone crate. It is
-data-oblivious (no
+substrate for vector retrieval, developed within the
+[turbovec](https://github.com/RyanCodrai/turbovec) project (MIT, by Ryan
+Codrai) and factored out here as a standalone crate. It is data-oblivious (no
 training, rotation, or codebook), uses analytical norms, and carries **no
 system dependencies** — no BLAS, no `ndarray`, no `faer`.
 

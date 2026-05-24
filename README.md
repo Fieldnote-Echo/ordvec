@@ -12,10 +12,36 @@
 Training-free ordinal & sign quantization for vector retrieval.
 
 `ordvec` is a small, dependency-light Rust crate for compressed
-nearest-neighbour search over high-dimensional embeddings. It is
-**data-oblivious**: no training, no rotation, no codebook. Norms are
-analytical. There are **no system dependencies** — no BLAS, no
-`ndarray`, no `faer`.
+nearest-neighbour search over high-dimensional embeddings.
+
+## What's different
+
+Compressed-retrieval libraries usually either **fit a codebook to your
+data** (product / scalar quantization) or **wrap vectors in a graph**
+(HNSW). ordvec does neither — it quantizes the *ordinal* structure of each
+vector on its own:
+
+- **Training-free, data-oblivious.** No codebook, no learned rotation, no
+  fit step. Encoding is a per-vector rank (or sign) transform — index the
+  very first vector with no prior data, and never refit when the corpus
+  drifts.
+- **Zero system dependencies.** Pure Rust — no BLAS / LAPACK / `ndarray` /
+  `faer`. Builds and cross-compiles cleanly, including to `aarch64` and
+  `wasm32`.
+- **Ordinal + sign quantization.** Compresses the *rank order* of
+  coordinates (1/2/4 bits each) and their signs — a different lever from
+  the product / scalar / binary quantization most crates use.
+- **Predictable footprint.** Exactly `dim * bits / 8` bytes per document —
+  known before you see any data (256 B at dim = 1024, 2-bit), with
+  `bits ∈ {1, 2, 4}` the size/recall knob.
+- **Two-stage retrieval, built in.** A cheap bitmap / sign-popcount
+  prefilter feeds an exact rerank — the coarse→fine pipeline ships as
+  library primitives.
+
+ordvec is a compressed **flat-scan** substrate (optionally two-stage), not
+a navigable-graph or billion-scale ANN index: it pairs small codes with
+fast runtime-dispatched SIMD (AVX-512/AVX2, NEON, wasm128) rather than
+graph traversal.
 
 ## Ordinal index family
 
@@ -82,13 +108,11 @@ A committed capture of one run lives at
 
 ## Provenance
 
-ordvec is an original ordinal/sign retrieval substrate — all of its code
-is the author's own work, developed within the
-[turbovec](https://github.com/RyanCodrai/turbovec) project (an
-MIT-licensed vector-quantization crate by Ryan Codrai) and factored out
-here as a standalone, zero-system-dependency crate. The full development
-history lives in this repository's git log. With thanks to the turbovec
-project, where this substrate was built.
+ordvec was developed within turbovec, factored out into this standalone,
+zero-system-dependency crate.
+[turbovec](https://github.com/RyanCodrai/turbovec) (MIT, by Ryan Codrai)
+is credited as the project it grew within, with thanks; ordvec's
+development history is in this repository's git log.
 
 ## Contributing
 
