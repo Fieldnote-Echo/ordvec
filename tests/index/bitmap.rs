@@ -180,7 +180,9 @@ fn bitmap_top_m_candidates_deterministic_at_ties() {
     // Batched path agrees with single-query (the batched-equivalence
     // guarantee from `bitmap_batched_matches_single_query` extended
     // to the high-tie regime).
-    let queries: Vec<f32> = (0..3 * TIE_D).map(|_| rng.random_range(-1.0..1.0)).collect();
+    let queries: Vec<f32> = (0..3 * TIE_D)
+        .map(|_| rng.random_range(-1.0..1.0))
+        .collect();
     for q in [
         &queries[..TIE_D],
         &queries[TIE_D..2 * TIE_D],
@@ -367,7 +369,9 @@ fn bitmap_batched_matches_single_query() {
     bitmap.add(&corpus);
     let mut rng = ChaCha8Rng::seed_from_u64(99);
     let batch: usize = 7; // intentionally non-power-of-2
-    let queries: Vec<f32> = (0..batch * D).map(|_| rng.random_range(-1.0..1.0)).collect();
+    let queries: Vec<f32> = (0..batch * D)
+        .map(|_| rng.random_range(-1.0..1.0))
+        .collect();
     for m in [10usize, 50, 100] {
         let single: Vec<Vec<u32>> = (0..batch)
             .map(|bi| bitmap.top_m_candidates(&queries[bi * D..(bi + 1) * D], m))

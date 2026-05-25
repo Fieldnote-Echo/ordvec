@@ -525,7 +525,9 @@ mod tests {
         idx.add(&corpus);
         let mut rng = ChaCha8Rng::seed_from_u64(99);
         let batch: usize = 5;
-        let queries: Vec<f32> = (0..batch * D).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..batch * D)
+            .map(|_| rng.random_range(-1.0..1.0))
+            .collect();
         for m in [10usize, 30, 100] {
             let single: Vec<Vec<u32>> = (0..batch)
                 .map(|bi| idx.top_m_candidates(&queries[bi * D..(bi + 1) * D], m))
@@ -552,7 +554,9 @@ mod tests {
         const BIG_D: usize = 65_536; // u16::MAX + 1 — the smallest dim above the old cap
         let n = 4;
         let mut rng = ChaCha8Rng::seed_from_u64(41);
-        let corpus: Vec<f32> = (0..n * BIG_D).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let corpus: Vec<f32> = (0..n * BIG_D)
+            .map(|_| rng.random_range(-1.0..1.0))
+            .collect();
         let mut original = SignBitmap::new(BIG_D);
         original.add(&corpus);
 
@@ -616,10 +620,14 @@ mod tests {
         const PROD_D: usize = 1024;
         let n = 256;
         let mut rng = ChaCha8Rng::seed_from_u64(31);
-        let corpus: Vec<f32> = (0..n * PROD_D).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let corpus: Vec<f32> = (0..n * PROD_D)
+            .map(|_| rng.random_range(-1.0..1.0))
+            .collect();
         let mut idx = SignBitmap::new(PROD_D);
         idx.add(&corpus);
-        let queries: Vec<f32> = (0..3 * PROD_D).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let queries: Vec<f32> = (0..3 * PROD_D)
+            .map(|_| rng.random_range(-1.0..1.0))
+            .collect();
         // Batched (AVX-512 dispatched at qpv=16) must agree with scalar
         // reference computed via simple Hamming.
         let batched = idx.top_m_candidates_batched(&queries, 32);
