@@ -89,7 +89,9 @@ jobs:
       # a packaging path the prebuilt wheels never exercise (a missing path-dep
       # vendor or workspace mis-resolution would fail here, not in users'
       # installs). The runner's preinstalled Rust toolchain builds it.
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
       - name: Set up Python to test the sdist
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
