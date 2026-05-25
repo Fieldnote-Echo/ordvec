@@ -16,7 +16,7 @@ name: codeql
 #
 # Because this workflow runs UNATTENDED on a cron schedule AND holds
 # `security-events: write`, every third-party action is SHA-pinned (immutable)
-# — a compromised mutable tag (@v3/@v6) cannot auto-execute on a scheduled,
+# — a compromised mutable tag (@v4/@v6) cannot auto-execute on a scheduled,
 # write-scoped runner. harden-runner audits egress as the first step.
 
 on:
@@ -60,13 +60,13 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
         with:
           languages: ${{ matrix.language }}
           # No-build database creation (GA for rust/python/actions).
           build-mode: none
 
       - name: Perform CodeQL analysis
-        uses: github/codeql-action/analyze@03e4368ac7daa2bd82b3e85262f3bf87ee112f57 # v3
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa # v4
         with:
           category: "/language:${{ matrix.language }}"
