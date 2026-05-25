@@ -252,7 +252,10 @@ pub(crate) fn write_rank(
 
 pub(crate) fn load_rank(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u16>)> {
     let file = File::open(path)?;
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    // Propagate a metadata failure rather than swallowing it as `0`: a bogus
+    // `0` would make the payload-vs-file check pass for an empty corpus even on
+    // a TOCTOU-racy filesystem (NFS/procfs), false-rejecting a valid index.
+    let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
@@ -355,7 +358,10 @@ pub(crate) fn write_rankquant(
 
 pub(crate) fn load_rankquant(path: impl AsRef<Path>) -> io::Result<(u8, usize, usize, Vec<u8>)> {
     let file = File::open(path)?;
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    // Propagate a metadata failure rather than swallowing it as `0`: a bogus
+    // `0` would make the payload-vs-file check pass for an empty corpus even on
+    // a TOCTOU-racy filesystem (NFS/procfs), false-rejecting a valid index.
+    let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
@@ -481,7 +487,10 @@ pub(crate) fn write_bitmap(
 
 pub(crate) fn load_bitmap(path: impl AsRef<Path>) -> io::Result<(usize, usize, usize, Vec<u64>)> {
     let file = File::open(path)?;
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    // Propagate a metadata failure rather than swallowing it as `0`: a bogus
+    // `0` would make the payload-vs-file check pass for an empty corpus even on
+    // a TOCTOU-racy filesystem (NFS/procfs), false-rejecting a valid index.
+    let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
@@ -597,7 +606,10 @@ pub(crate) fn write_sign_bitmap(
 /// breaking the constructor↔loader roundtrip.
 pub(crate) fn load_sign_bitmap(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u64>)> {
     let file = File::open(path)?;
-    let file_len = file.metadata().map(|m| m.len()).unwrap_or(0);
+    // Propagate a metadata failure rather than swallowing it as `0`: a bogus
+    // `0` would make the payload-vs-file check pass for an empty corpus even on
+    // a TOCTOU-racy filesystem (NFS/procfs), false-rejecting a valid index.
+    let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)?;
