@@ -39,7 +39,10 @@ wf=".github/workflows/release-python.yml"
 step_line() { grep -nE "$1" "$wf" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1; }
 
 dl_line="$(step_line 'uses:[[:space:]]*actions/download-artifact' || true)"
-clean_line="$(step_line 'run:.*(find|rm).*cdx\.json' || true)"
+# The cleanup must actually DELETE: `find … *.cdx.json … -delete` or `rm … *.cdx.json`.
+# A bare `find` that only lists/prints the SBOM would leave it in dist/ (a no-op),
+# so requiring the deleting action is what proves the regression is fixed.
+clean_line="$(step_line 'run:.*(find.*cdx\.json.*-delete|rm[[:space:]].*cdx\.json)' || true)"
 pub_line="$(step_line 'uses:[[:space:]]*pypa/gh-action-pypi-publish' || true)"
 
 [ -n "$dl_line" ]    || fail "$wf: no actions/download-artifact step found"
