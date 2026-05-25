@@ -39,5 +39,7 @@ into this standalone package. turbovec
 ([MIT](https://github.com/RyanCodrai/turbovec), by Ryan Codrai) is credited as
 the origin project.
 
-Dual-licensed under either of [MIT](LICENSE-MIT) or
-[Apache-2.0](LICENSE-APACHE) at your option.
+Dual-licensed under either of
+[MIT](https://github.com/Fieldnote-Echo/ordvec/blob/main/LICENSE-MIT) or
+[Apache-2.0](https://github.com/Fieldnote-Echo/ordvec/blob/main/LICENSE-APACHE)
+at your option.
