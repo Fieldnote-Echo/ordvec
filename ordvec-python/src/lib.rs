@@ -565,8 +565,17 @@ impl Bitmap {
             )
         })?;
         ensure_finite(slice)?;
+        // Guard the core's internal `batch * n` (scores) and `batch * qpv`
+        // (query bitmaps) allocations BEFORE the call: an overflow there wraps
+        // and then indexes out of bounds (a panic), so convert it to a clean
+        // ValueError up front. `n.max(qpv)` bounds both core buffers.
+        let n = self.inner.len();
+        let qpv = self.inner.dim() / 64;
+        batch.checked_mul(n.max(qpv)).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("batch * index size overflows usize")
+        })?;
         let result = self.inner.top_m_candidates_batched(slice, m);
-        let m_eff = m.min(self.inner.len());
+        let m_eff = m.min(n);
         let total = batch.checked_mul(m_eff).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("result size (batch * m) overflows usize")
         })?;
@@ -614,10 +623,19 @@ impl Bitmap {
         // `k`/`m`. The `.max(1)` keeps the core's `batch_size > 0` invariant
         // when there are no queries (the core then early-returns empty).
         let effective_batch = batch_size.min(n_queries.max(1));
+        // Guard the core's per-chunk `effective_batch * n` / `* qpv` allocations
+        // BEFORE the call (the chunked path calls top_m_candidates_batched once
+        // per chunk), so an overflow is a clean ValueError rather than a
+        // wrap -> OOB panic inside the chunk scan. `n.max(qpv)` bounds both.
+        let n = self.inner.len();
+        let qpv = self.inner.dim() / 64;
+        effective_batch.checked_mul(n.max(qpv)).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("batch_size * index size overflows usize")
+        })?;
         let result = self
             .inner
             .top_m_candidates_batched_chunked(slice, m, effective_batch);
-        let m_eff = m.min(self.inner.len());
+        let m_eff = m.min(n);
         let total = n_queries.checked_mul(m_eff).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("result size (n_queries * m) overflows usize")
         })?;
@@ -813,11 +831,20 @@ impl SignBitmap {
             )
         })?;
         ensure_finite(slice)?;
+        // Guard the core's internal `batch * n` (scores) and `batch * qpv`
+        // (query bitmaps) allocations BEFORE the call: an overflow there wraps
+        // and then indexes out of bounds (a panic), so convert it to a clean
+        // ValueError up front. `n.max(qpv)` bounds both core buffers.
+        let n = self.inner.len();
+        let qpv = self.inner.dim() / 64;
+        batch.checked_mul(n.max(qpv)).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("batch * index size overflows usize")
+        })?;
         let result = self.inner.top_m_candidates_batched(slice, m);
         // m_eff is the per-row width the Rust impl guarantees for every non-empty
         // row; deriving it from `m` and the index size keeps the shape consistent
         // at `batch=0`.
-        let m_eff = m.min(self.inner.len());
+        let m_eff = m.min(n);
         let total = batch.checked_mul(m_eff).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("result size (batch * m) overflows usize")
         })?;
