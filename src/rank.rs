@@ -211,12 +211,14 @@ pub fn bucket_centre(bucket: u8, bits: u8) -> f32 {
 /// # Domain
 /// The index types only call this with `d ∈ [2, MAX_DIM]` (the `u16` rank
 /// invariant). It is `pub` as a standalone analytical-norm utility and stays
-/// well-defined for any `d`: the product is formed in `f64`, so the result is
-/// exact across the whole reachable rank range and saturates to
-/// `f32::INFINITY` only for astronomically large `d` (`d³/12 > f32::MAX`, i.e.
-/// `d ≳ 1.5e26`) — far beyond the `u16` cap. No artificial guard is imposed:
-/// for any `d` a host can represent, `+∞` is the honest norm of an
-/// unrepresentable magnitude, not a silent error.
+/// well-defined for any `d`: the product is formed in `f64` to avoid `f32`
+/// intermediate overflow and catastrophic cancellation at large `d`, then
+/// narrowed to the returned `f32` (correctly rounded to `f32` precision — `sqrt`
+/// and the `f64 → f32` narrowing both round, so the value is not bit-exact).
+/// It saturates to `f32::INFINITY` only for astronomically large `d`
+/// (`d³/12 > f32::MAX`, i.e. `d ≳ 1.5e26`) — far beyond the `u16` cap. No
+/// artificial guard is imposed: for any `d` a host can represent, `+∞` is the
+/// honest norm of an unrepresentable magnitude, not a silent error.
 #[inline]
 pub fn rank_norm(d: usize) -> f32 {
     let d = d as f64;

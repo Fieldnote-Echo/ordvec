@@ -20,6 +20,16 @@
 //! File paths passed to `write` / `load` are forwarded to the filesystem
 //! unmodified — there is no `..` / traversal sanitisation — so callers must
 //! treat the path as trusted input (see the `ordvec` package docstring).
+//!
+//! Threading: the search / candidate / `add` methods release the GIL
+//! (`py.detach`) around the Rust scan and read the input arrays *in place*
+//! (the `PyReadonlyArray` keeps the buffer alive and blocks rust-numpy-mediated
+//! writes for the call's duration, but a raw Python in-place mutation from
+//! another thread is not tracked). So a caller must not mutate an input array
+//! from another thread while such a call is in progress — the released GIL lets
+//! the write race the read and may yield inconsistent results. This is the
+//! usual contract for GIL-releasing numeric extensions (NumPy behaves the same
+//! way).
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
