@@ -68,6 +68,7 @@ jobs:
       - name: Build instrumented extension, run pytest, collect coverage
         shell: bash
         run: |
+          set -euo pipefail
           python -m venv .venv
           . .venv/bin/activate
           pip install --require-hashes -r ordvec-python/requirements-dev.txt
