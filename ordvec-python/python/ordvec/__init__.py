@@ -17,6 +17,12 @@ standalone free functions.
 The ``*Index`` names are back-compat aliases for the pre-0.2 turbovec-python
 rank-mode classes; they are kept only to ease script migration and are not part
 of the documented surface — new code should use the OrdVec ontology names above.
+
+On-disk persistence: each class's ``write(path)`` / ``load(path)`` passes
+``path`` straight to the filesystem with no normalisation or ``..`` / traversal
+checks. Treat ``path`` as trusted input — in a service that derives it from
+caller-supplied data, validate or sandbox the path first, exactly as you would
+before a bare ``open()``.
 """
 
 from ._ordvec import (

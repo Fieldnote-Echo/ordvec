@@ -207,6 +207,16 @@ pub fn bucket_centre(bucket: u8, bits: u8) -> f32 {
 /// `(d - 1) / 2` and the centred coordinates have variance
 /// `(d^2 - 1) / 12`. The L2 norm is therefore
 /// `sqrt(d * (d^2 - 1) / 12)`.
+///
+/// # Domain
+/// The index types only call this with `d ∈ [2, MAX_DIM]` (the `u16` rank
+/// invariant). It is `pub` as a standalone analytical-norm utility and stays
+/// well-defined for any `d`: the product is formed in `f64`, so the result is
+/// exact across the whole reachable rank range and saturates to
+/// `f32::INFINITY` only for astronomically large `d` (`d³/12 > f32::MAX`, i.e.
+/// `d ≳ 1.5e26`) — far beyond the `u16` cap. No artificial guard is imposed:
+/// for any `d` a host can represent, `+∞` is the honest norm of an
+/// unrepresentable magnitude, not a silent error.
 #[inline]
 pub fn rank_norm(d: usize) -> f32 {
     let d = d as f64;
@@ -476,7 +486,16 @@ impl Rank {
     /// specific to `Rank` are checked here.
     pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let (dim, n_vectors, ranks) = crate::rank_io::load_rank(path)?;
-        if ranks.len() != n_vectors.saturating_mul(dim) {
+        // `checked_mul` (not `saturating`): on a 32-bit target `n_vectors * dim`
+        // can overflow `usize`; treat that as malformed rather than letting a
+        // saturated `usize::MAX` stand in for the expected length.
+        let expected = n_vectors.checked_mul(dim).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "TVR1 n_vectors * dim overflows usize",
+            )
+        })?;
+        if ranks.len() != expected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "TVR1 payload length does not match dim * n_vectors",

@@ -96,6 +96,12 @@ pub type RankQuantFastscanIndex = RankQuantFastscan;
 /// `scores` and `indices` are flat row-major buffers of length `nq * k`;
 /// block `qi` is `[qi * k, (qi + 1) * k)`. Use [`Self::scores_for_query`]
 /// / [`Self::indices_for_query`] to slice a single query's results.
+///
+/// The fields are `pub` deliberately: callers (notably the Python binding)
+/// move the buffers out by value for a zero-copy hand-off into the host array
+/// type. Prefer the slice accessors above for read-only per-query access —
+/// exposing the flat buffers as the stable representation is the trade-off for
+/// that zero-copy interop.
 pub struct SearchResults {
     pub scores: Vec<f32>,
     pub indices: Vec<i64>,

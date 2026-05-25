@@ -113,6 +113,16 @@ pub(crate) fn pack_fastscan_b2(buckets: &[u8], n: usize, dim: usize) -> Vec<u8> 
 /// The single global affine fits all pair-LUTs into the same u8 scale
 /// so we can sum quantized values across pairs without per-pair
 /// rescaling — the classic FAISS FastScan LUT trick.
+///
+/// # Precision trade-off (known, intentional)
+/// One global affine `[g_min, g_max] → [0, 255]` quantizes *every* coord-pair
+/// LUT to the same 8-bit scale. The per-entry error is `O(span / 255)`; when a
+/// single coord pair has an outlier score range it widens `span`, so the other
+/// pairs lose relative precision. This is the standard FastScan approximation
+/// (the same trade-off FAISS makes) and is acceptable for the b=2
+/// approximate-scoring / candidate role this path serves — it is a fast
+/// pre-ranker, not the exact scorer. Callers needing exact scores use
+/// [`RankQuant::search_asymmetric`](crate::RankQuant::search_asymmetric).
 fn build_fastscan_b2_query(q: &[f32], dim: usize) -> (Vec<u8>, f32, f32) {
     let pairs = dim / 2;
     // Centres for b=2: bucket b ∈ {0,1,2,3} → centre = b - 1.5
@@ -178,6 +188,21 @@ unsafe fn scan_b2_fastscan_avx512(
     top: &mut TopK,
 ) {
     use std::arch::x86_64::*;
+
+    // SAFETY: every raw load below is proven in-bounds by invariants the caller
+    // (`search_asymmetric_fastscan_b2`) establishes before dispatch:
+    //   • `packed_fs.len() == n_blocks * pairs * 32`, asserted with the product
+    //     formed via `checked_mul` (overflow → caller panics), where
+    //     `n_blocks == n.div_ceil(32)`, `pairs == dim/2`, `bytes_per_block ==
+    //     pairs * 32`.
+    //   • `lut_u8.len() == pairs * 16` (built by `build_fastscan_b2_query` for
+    //     this `dim`).
+    // For block `b ∈ 0..n_blocks`, `block_ptr = packed_fs + b*pairs*32`; the
+    // per-pair 32-byte load `block_ptr.add(pp*32)` (`pp ∈ p..inner_end ⊆
+    // 0..pairs`) reaches at most byte `(b+1)*pairs*32 - 1 ≤ len-1`, and the
+    // 16-byte LUT load `lut_u8.add(pp*16)` reaches at most `pairs*16 - 1 =
+    // lut_u8.len()-1`. AVX-512 F/BW/DQ are confirmed by the `#[target_feature]`
+    // gate plus the caller's runtime `is_x86_feature_detected!`.
 
     let pairs = dim / 2;
     let bytes_per_block = pairs * 32;
