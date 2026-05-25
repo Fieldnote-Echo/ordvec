@@ -19,6 +19,11 @@ Contributions to the code, the docs, and the paper are all welcome.
   `.tvbm` / `.tvsb`) and the public method names
   (`new` / `add` / `search` / `search_asymmetric*` / `top_m_candidates*` /
   `write` / `load`) are stable — please don't rename them.
+- **Tests are required for new functionality.** As major new functionality
+  is added, tests covering it MUST be added to the automated test suite
+  (`cargo test`, plus `pytest` for the Python bindings). Changes that add
+  capability without accompanying tests will be asked to add them before
+  merge.
 
 ## The gate (run before opening a PR — mirrors CI)
 
