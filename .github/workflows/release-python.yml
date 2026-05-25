@@ -88,9 +88,42 @@ jobs:
           name: sdist
           path: ordvec-python/dist
 
+  require-ci-green:
+    # The wheel must not ship from a commit whose core (`ci.yml`) or binding
+    # (`python.yml`) matrices have not gone green. The build-wheels job above
+    # builds + pytest-checks each platform wheel, but it does not cover the core
+    # crate's gates or the binding's full OS/Python matrix and lint. Require
+    # both workflows to have concluded `success` for this exact SHA.
+    name: require core + binding CI green for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: assert ci.yml and python.yml are green for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Require a SUCCESSFUL run for this SHA *on main* for each workflow.
+          # Filtering on the branch as well as head_sha stops a green run for the
+          # same commit on an unrelated branch from satisfying the gate.
+          for wf in ci.yml python.yml; do
+            ok="$(gh api \
+              "repos/${REPO}/actions/workflows/${wf}/runs?head_sha=${SHA}&branch=main&per_page=20" \
+              --jq '[.workflow_runs[] | select(.head_branch == "main" and .conclusion == "success")] | length')"
+            echo "successful ${wf} runs for ${SHA} on main: ${ok}"
+            if [ "${ok}" -lt 1 ]; then
+              echo "::error::no successful ${wf} run for ${SHA} on main. Push to main, let CI pass, then re-run this release."
+              exit 1
+            fi
+          done
+
   publish:
     name: publish to PyPI
-    needs: [build-wheels, build-sdist]
+    needs: [build-wheels, build-sdist, require-ci-green]
     runs-on: ubuntu-latest
     environment:
       name: pypi

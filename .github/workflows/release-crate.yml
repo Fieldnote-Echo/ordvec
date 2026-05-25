@@ -39,9 +39,42 @@ jobs:
       - name: Dry-run the publish (packaging + metadata + verify build)
         run: cargo publish -p ordvec --locked --dry-run
 
+  require-ci-green:
+    # A manual release dispatch must not ship a commit whose full CI matrix has
+    # not gone green. The `verify` job above re-runs tests + the publish
+    # dry-run, but it does NOT cover lint, the no-default/experimental configs,
+    # MSRV 1.89, the deps + cargo-deny supply-chain gates, or the AVX-512-SDE /
+    # wasm-simd128 runtime coverage. Rather than duplicate (and drift from) all
+    # of ci.yml, require that the `ci` workflow concluded `success` for this
+    # exact SHA before publish runs.
+    name: require full CI green for this commit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: assert ci.yml is green for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Require a SUCCESSFUL ci.yml run for this SHA *on main*. Filtering on
+          # the branch as well as head_sha stops a green run for the same commit
+          # on an unrelated branch from satisfying the gate.
+          ok="$(gh api \
+            "repos/${REPO}/actions/workflows/ci.yml/runs?head_sha=${SHA}&branch=main&per_page=20" \
+            --jq '[.workflow_runs[] | select(.head_branch == "main" and .conclusion == "success")] | length')"
+          echo "successful ci.yml runs for ${SHA} on main: ${ok}"
+          if [ "${ok}" -lt 1 ]; then
+            echo "::error::no successful ci.yml run for ${SHA} on main. Push to main, let CI pass, then re-run this release."
+            exit 1
+          fi
+
   publish:
     name: publish to crates.io
-    needs: verify
+    needs: [verify, require-ci-green]
     runs-on: ubuntu-latest
     environment: crates-io
     permissions:
