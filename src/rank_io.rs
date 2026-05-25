@@ -788,11 +788,18 @@ mod tests {
     fn writers_reject_oversized_payload_without_truncating() {
         use std::io::ErrorKind;
         let tmp_dir = std::env::temp_dir();
+        // Per-run nonce (not just the pid, which the OS reuses) so a leftover
+        // file from a prior aborted run can't make the `!exists()` checks fail.
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
         let path = |s: &str| {
             tmp_dir.join(format!(
-                "rank_io_write_guard_{}_{}.bin",
-                s,
-                std::process::id()
+                "rank_io_write_guard_{}_{}_{}.bin",
+                std::process::id(),
+                nonce,
+                s
             ))
         };
 

@@ -26,20 +26,27 @@ pub(crate) fn result_buffer_len(nq: usize, k: usize) -> usize {
 }
 
 /// Validate that an `add` would not grow an index past
-/// `rank_io::MAX_VECTORS`, returning the new length.
+/// `rank_io::MAX_VECTORS`, **and** that the resulting row-major buffer of
+/// `new_n * elems_per_vec` elements still fits `usize`. Returns the new length.
 ///
 /// The on-disk loaders cap `n_vectors` at `MAX_VECTORS` (64 Mi); the four
 /// in-memory growth paths (`Rank` / `RankQuant` / `Bitmap` / `SignBitmap`
 /// `add`) share this guard so the in-memory count never exceeds the loaders'
 /// `n_vectors` ceiling. Candidate APIs also materialise document IDs as
 /// `u32`, and `MAX_VECTORS` sits well below `u32::MAX`, so every emitted ID
-/// stays representable. Fails loud (panic) on overflow — matching `add`'s
-/// other contract asserts — rather than silently wrapping into a truncated
-/// ID space (issue #25). Note: this bounds the document *count*, not the
-/// total payload — the loaders' separate `MAX_PAYLOAD` byte cap is an
-/// independent (load-side) defence.
+/// stays representable.
+///
+/// The buffer-length check (`elems_per_vec` is `dim` for `Rank`, packed
+/// bytes/vec for `RankQuant`, or qwords/vec for the bitmaps) matters on 32-bit
+/// targets (wasm32, armv7): there `MAX_VECTORS` (2^26) times a large `dim` (up
+/// to 2^16) overflows `usize`, which would wrap the `resize` length in `add`.
+/// Both checks fail loud (panic) — matching `add`'s other contract asserts and
+/// the crate's checked-allocation discipline (cf. [`result_buffer_len`], the
+/// loaders) — rather than silently wrapping into a truncated ID space or
+/// buffer (issue #25). The *count* cap is the `u32` / round-trip contract; the
+/// byte payload is bounded separately by the loaders' `MAX_PAYLOAD` cap.
 #[inline]
-pub(crate) fn checked_new_len(current: usize, adding: usize) -> usize {
+pub(crate) fn checked_new_len(current: usize, adding: usize, elems_per_vec: usize) -> usize {
     let new_n = current
         .checked_add(adding)
         .expect("ordvec: n_vectors overflows usize");
@@ -48,6 +55,9 @@ pub(crate) fn checked_new_len(current: usize, adding: usize) -> usize {
         "ordvec: index would exceed MAX_VECTORS ({}); had {current}, adding {adding}",
         crate::rank_io::MAX_VECTORS,
     );
+    new_n
+        .checked_mul(elems_per_vec)
+        .expect("ordvec: index buffer length (n_vectors * elems_per_vec) overflows usize");
     new_n
 }
 
@@ -457,11 +467,14 @@ mod tests {
     fn checked_new_len_accepts_up_to_max() {
         use crate::rank_io::MAX_VECTORS;
         // Exactly MAX_VECTORS is allowed — the loaders accept the same ceiling,
-        // so a freshly grown index stays write/load round-trippable.
-        assert_eq!(checked_new_len(0, MAX_VECTORS), MAX_VECTORS);
-        assert_eq!(checked_new_len(MAX_VECTORS - 1, 1), MAX_VECTORS);
+        // so a freshly grown index stays write/load round-trippable. (elems=1
+        // isolates the count cap from the buffer-size check.)
+        assert_eq!(checked_new_len(0, MAX_VECTORS, 1), MAX_VECTORS);
+        assert_eq!(checked_new_len(MAX_VECTORS - 1, 1, 1), MAX_VECTORS);
         // An empty add never trips the guard.
-        assert_eq!(checked_new_len(MAX_VECTORS, 0), MAX_VECTORS);
+        assert_eq!(checked_new_len(MAX_VECTORS, 0, 1), MAX_VECTORS);
+        // A realistic dim still fits on 64-bit (MAX_VECTORS * 4096 << usize::MAX).
+        assert_eq!(checked_new_len(0, MAX_VECTORS, 4096), MAX_VECTORS);
     }
 
     #[test]
@@ -470,13 +483,21 @@ mod tests {
         use crate::rank_io::MAX_VECTORS;
         // One past the loader ceiling must fail loud rather than build an index
         // that write/load would refuse to round-trip.
-        let _ = checked_new_len(MAX_VECTORS, 1);
+        let _ = checked_new_len(MAX_VECTORS, 1, 1);
     }
 
     #[test]
-    #[should_panic(expected = "overflows usize")]
+    #[should_panic(expected = "n_vectors overflows usize")]
     fn checked_new_len_rejects_usize_overflow() {
-        // The running total itself must not wrap before the cap is checked.
-        let _ = checked_new_len(usize::MAX, 1);
+        // The running count itself must not wrap before the cap is checked.
+        let _ = checked_new_len(usize::MAX, 1, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "buffer length")]
+    fn checked_new_len_rejects_buffer_overflow() {
+        // Count is within MAX_VECTORS, but new_n * elems_per_vec overflows
+        // usize — the 32-bit (wasm32) hazard the `resize` in `add` would hit.
+        let _ = checked_new_len(0, 2, usize::MAX);
     }
 }

@@ -286,7 +286,7 @@ impl Rank {
             "vectors length must be a multiple of dim",
         );
         assert_all_finite(vectors);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n);
+        let new_n = crate::util::checked_new_len(self.n_vectors, n, self.dim);
         let start = self.ranks.len();
         self.ranks.resize(start + n * self.dim, 0);
         let dim = self.dim;

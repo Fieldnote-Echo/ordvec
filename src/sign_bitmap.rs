@@ -84,7 +84,7 @@ impl SignBitmap {
         crate::util::assert_all_finite(vectors);
         let n = vectors.len() / self.dim;
         assert_eq!(vectors.len(), n * self.dim);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n);
+        let new_n = crate::util::checked_new_len(self.n_vectors, n, self.qwords_per_vec);
         let qpv = self.qwords_per_vec;
         let dim = self.dim;
         let start = self.bitmaps.len();

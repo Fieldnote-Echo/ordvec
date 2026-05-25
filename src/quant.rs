@@ -161,8 +161,8 @@ impl RankQuant {
             "vectors length must be a multiple of dim",
         );
         assert_all_finite(vectors);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n);
         let bytes_per_vec = rankquant_bytes_per_vec(self.dim, self.bits);
+        let new_n = crate::util::checked_new_len(self.n_vectors, n, bytes_per_vec);
         let start = self.packed.len();
         self.packed.resize(start + n * bytes_per_vec, 0);
         let dim = self.dim;

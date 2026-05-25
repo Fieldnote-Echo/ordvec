@@ -74,7 +74,7 @@ impl Bitmap {
         let n = vectors.len() / self.dim;
         assert_eq!(vectors.len(), n * self.dim);
         assert_all_finite(vectors);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n);
+        let new_n = crate::util::checked_new_len(self.n_vectors, n, self.qwords_per_vec);
         let qpv = self.qwords_per_vec;
         let cutoff = (self.dim - self.n_top) as u16;
         let start = self.bitmaps.len();
