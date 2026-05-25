@@ -85,7 +85,7 @@ By contributing, you agree that your contributions are dual-licensed under
 ## Developer Certificate of Origin (DCO)
 
 All contributions must be signed off under the
-[Developer Certificate of Origin](DCO) (DCO 1.1) — signing off certifies that
+[Developer Certificate of Origin](./DCO) (DCO 1.1) — signing off certifies that
 you wrote the change, or otherwise have the right to submit it under the
 project's license. Add a sign-off line to every commit with:
 
