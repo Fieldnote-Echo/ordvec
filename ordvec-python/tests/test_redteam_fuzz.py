@@ -96,8 +96,16 @@ _WRONG_F32_DTYPES = [
 # Python int and anything >= 2**64 to a clean OverflowError on usize conversion.
 _BAD_INT_SCALARS = [-1, -(2**40), 2**64, 2**70]
 # Huge-but-valid usize values that the core must CLAMP (to k<=n / m<=n), never
-# allocate eagerly. 2**63 is a valid usize on a 64-bit target.
-_HUGE_VALID_USIZE = [2**40, 2**62, 2**63]
+# allocate eagerly. usize::MAX is 2**64-1 on 64-bit but only 2**32-1 on 32-bit, so
+# a 2**40+ literal would raise OverflowError at the PyO3 usize conversion on a
+# 32-bit target (before reaching the clamp). Pick values that fit usize on each
+# target so the clamp path is what's exercised everywhere.
+_64BIT = sys.maxsize > 2**32
+_HUGE_VALID_USIZE = [2**40, 2**62, 2**63] if _64BIT else [2**30, 2**31]
+# m-sweep lists for the batched/chunked flatten-invariant tests (same rationale).
+_HUGE_M = [0, 1, 1000, 2**40, 2**62] if _64BIT else [0, 1, 1000, 2**30, 2**31]
+_HUGE_M_MID = [0, 1, 1000, 2**62] if _64BIT else [0, 1, 1000, 2**31]
+_HUGE_M_SIMPLE = [0, 1, 2**62] if _64BIT else [0, 1, 2**31]
 
 
 # =====================================================================
@@ -727,7 +735,7 @@ def test_body_overlap_sorted_duplicate_doc_ids_accepted():
 
 
 @pytest.mark.parametrize("n", [0, 1, 7, 50])
-@pytest.mark.parametrize("m", [0, 1, 1000, 2**40, 2**62])
+@pytest.mark.parametrize("m", _HUGE_M)
 def test_bitmap_batched_flatten_invariant_holds(n, m):
     idx = Bitmap(dim=64, n_top=8)
     if n:
@@ -738,7 +746,7 @@ def test_bitmap_batched_flatten_invariant_holds(n, m):
 
 
 @pytest.mark.parametrize("n", [0, 1, 7, 50])
-@pytest.mark.parametrize("m", [0, 1, 1000, 2**62])
+@pytest.mark.parametrize("m", _HUGE_M_MID)
 def test_bitmap_chunked_flatten_invariant_holds(n, m):
     idx = Bitmap(dim=64, n_top=8)
     if n:
@@ -750,7 +758,7 @@ def test_bitmap_chunked_flatten_invariant_holds(n, m):
 
 
 @pytest.mark.parametrize("n", [0, 1, 7, 50])
-@pytest.mark.parametrize("m", [0, 1, 2**62])
+@pytest.mark.parametrize("m", _HUGE_M_SIMPLE)
 def test_signbitmap_batched_flatten_invariant_holds(n, m):
     idx = SignBitmap(dim=64)
     if n:
@@ -1056,28 +1064,31 @@ def test_isolated_signaling_nan_add_no_abort():
 def test_isolated_forged_huge_dim_load_no_abort():
     proc = _run_isolated(
         "import struct, tempfile, os\n"
-        "td = tempfile.mkdtemp()\n"
-        "p = os.path.join(td, 'r.tvr')\n"
-        "idx = Rank(128); idx.add(uv(20, 128)); idx.write(p)\n"
-        "data = bytearray(open(p,'rb').read())\n"
-        "data[5:9] = struct.pack('<I', 0xFFFF)\n"  # huge dim
-        "fp = os.path.join(td, 'forged.tvr')\n"
-        "open(fp,'wb').write(bytes(data))\n"
-        "try:\n"
-        "    Rank.load(fp)\n"
-        "    raise SystemExit('expected IOError on forged dim')\n"
-        "except OSError:\n"
-        "    pass\n"
+        "with tempfile.TemporaryDirectory() as td:\n"
+        "    p = os.path.join(td, 'r.tvr')\n"
+        "    idx = Rank(128); idx.add(uv(20, 128)); idx.write(p)\n"
+        "    data = bytearray(open(p,'rb').read())\n"
+        "    data[5:9] = struct.pack('<I', 0xFFFF)\n"  # huge dim
+        "    fp = os.path.join(td, 'forged.tvr')\n"
+        "    open(fp,'wb').write(bytes(data))\n"
+        "    try:\n"
+        "        Rank.load(fp)\n"
+        "        raise SystemExit('expected IOError on forged dim')\n"
+        "    except OSError:\n"
+        "        pass\n"
     )
     _assert_clean_child(proc)
 
 
 def test_isolated_huge_m_batched_no_abort_no_oom():
-    # m=2**62 on a release build with debug_asserts off — the m_eff flatten must
-    # not panic at .expect() and must not eagerly allocate 2**62 slots.
+    # A huge m on a release build with debug_asserts off — the m_eff flatten must
+    # not panic at .expect() and must not eagerly allocate that many slots. Use a
+    # value that fits usize on the target (2**62 on 64-bit, 2**31 on 32-bit) so it
+    # exercises the clamp rather than a PyO3 OverflowError.
+    huge_m = 2**62 if sys.maxsize > 2**32 else 2**31
     proc = _run_isolated(
         "bm = Bitmap(64, 8); bm.add(uv(50, 64))\n"
-        "out = bm.top_m_candidates_batched(uv(3, 64), m=2**62)\n"
+        f"out = bm.top_m_candidates_batched(uv(3, 64), m={huge_m})\n"
         "assert out.shape == (3, 50), out.shape\n"
     )
     _assert_clean_child(proc)

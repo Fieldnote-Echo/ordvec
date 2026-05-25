@@ -68,12 +68,37 @@ fn make_corpus(seed: u64, n: usize, dim: usize) -> Vec<f32> {
     (0..n * dim).map(|_| rng.random_range(-1.0..1.0)).collect()
 }
 
-/// Write `bytes` to a uniquely-named temp file and return its path.
+/// RAII guard that removes its temp file on drop, so a panicking test never
+/// leaks a file in `$TMPDIR` (the per-test cleanup below is skipped if an
+/// assertion fails first). Derefs / `AsRef`s to `Path`, so it passes straight to
+/// the loaders.
+struct TempFile(std::path::PathBuf);
+
+impl std::ops::Deref for TempFile {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for TempFile {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Write `bytes` to a uniquely-named temp file and return a self-deleting guard.
 /// Mirrors the `forge` helper in `src/rank_io.rs`'s test module
 /// (pid + nanosecond nonce + suffix) so concurrent test binaries never
 /// collide, and uses only `std::fs` / `std::env::temp_dir` (no
 /// `tempfile` dev-dependency).
-fn forge(suffix: &str, bytes: &[u8]) -> std::path::PathBuf {
+fn forge(suffix: &str, bytes: &[u8]) -> TempFile {
     let mut p = std::env::temp_dir();
     let nonce = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -86,7 +111,7 @@ fn forge(suffix: &str, bytes: &[u8]) -> std::path::PathBuf {
         suffix
     ));
     std::fs::File::create(&p).unwrap().write_all(bytes).unwrap();
-    p
+    TempFile(p)
 }
 
 /// Run all four `T::load` entry points against one forged file and assert
@@ -604,7 +629,7 @@ fn delta_d3_swap_remove_to_empty_then_readd() {
     // Remove a middle element, re-add, and verify the live count searches
     // cleanly (no stale bytes, no over/under count).
     let mut idx = Rank::new(dim);
-    idx.add(&make_corpus(8703, 4, dim)); // ids 0..4
+    idx.add(&make_corpus(8703, 4, dim)); // 4 docs, ids 0..=3
     let last_moved = idx.swap_remove(1); // pulls id 3 into slot 1
     assert_eq!(last_moved, 3);
     assert_eq!(idx.len(), 3);
