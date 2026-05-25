@@ -29,29 +29,40 @@ done
 #           -> pypa/gh-action-pypi-publish upload.
 #     twine rejects a stray .cdx.json in dist/, so the cleanup must run AFTER the
 #     download (otherwise it is a no-op for the downloaded SBOM) and BEFORE the
-#     upload. Match real step keys only: anchor on `uses:`/`run:`, skip YAML
-#     comment lines, and key on the pinned action name (`pypa/gh-action-pypi-publish`)
-#     rather than the bare string `pypi-publish`, which could match a job name.
+#     upload. The search is scoped to the `publish` job body, so a download step
+#     in another job cannot satisfy the ordering; the delete is matched on its own
+#     line, so it works for both `run: ... -delete` and a multi-line `run: |` block;
+#     comment lines are skipped; and the publish step keys on the pinned action
+#     name (not the bare string `pypi-publish`, which could match a job name).
 wf=".github/workflows/release-python.yml"
 [ -f "$wf" ] || fail "$wf: workflow file not found"
 
-# Line number of the first real (non-comment) line matching the regex, if any.
-step_line() { grep -nE "$1" "$wf" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1; }
+# Extract the `publish` job body: from its `  publish:` key to the next
+# 2-space-indented job key, or EOF. Scoping here is what makes the ordering
+# meaningful — the three steps must live in the SAME (publish) job.
+pub_start="$(grep -nE '^  publish:[[:space:]]*$' "$wf" | head -1 | cut -d: -f1)"
+[ -n "$pub_start" ] || fail "$wf: no 'publish:' job found"
+pub_end="$(awk -v s="$pub_start" 'NR>s && /^  [A-Za-z0-9_-]+:/ {print NR-1; exit}' "$wf")"
+[ -n "$pub_end" ] || pub_end="$(awk 'END{print NR}' "$wf")"
+job="$(sed -n "${pub_start},${pub_end}p" "$wf")"
 
-dl_line="$(step_line 'uses:[[:space:]]*actions/download-artifact' || true)"
-# The cleanup must actually DELETE: `find … *.cdx.json … -delete` or `rm … *.cdx.json`.
-# A bare `find` that only lists/prints the SBOM would leave it in dist/ (a no-op),
-# so requiring the deleting action is what proves the regression is fixed.
-clean_line="$(step_line 'run:.*(find.*cdx\.json.*-delete|rm[[:space:]].*cdx\.json)' || true)"
-pub_line="$(step_line 'uses:[[:space:]]*pypa/gh-action-pypi-publish' || true)"
+# First real (non-comment) line WITHIN the publish job matching the regex.
+in_job() { printf '%s\n' "$job" | grep -nE "$1" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1; }
 
-[ -n "$dl_line" ]    || fail "$wf: no actions/download-artifact step found"
-[ -n "$clean_line" ] || fail "$wf: publish job has no run: step deleting *.cdx.json from dist/"
-[ -n "$pub_line" ]   || fail "$wf: no pypa/gh-action-pypi-publish step found"
+dl_line="$(in_job 'uses:[[:space:]]*actions/download-artifact' || true)"
+# Match the deletion command itself (not the `run:` key), so a multi-line
+# `run: |` block works too. Still requires a real delete — `find ... -delete` or
+# `rm ... *.cdx.json` — not a bare reference that would leave the SBOM in dist/.
+clean_line="$(in_job '(find.*cdx\.json.*-delete|rm[[:space:]].*cdx\.json)' || true)"
+pub_line="$(in_job 'uses:[[:space:]]*pypa/gh-action-pypi-publish' || true)"
+
+[ -n "$dl_line" ]    || fail "$wf (publish job): no actions/download-artifact step found"
+[ -n "$clean_line" ] || fail "$wf (publish job): no step deleting *.cdx.json from dist/ (need 'find ... -delete' or 'rm ... *.cdx.json')"
+[ -n "$pub_line" ]   || fail "$wf (publish job): no pypa/gh-action-pypi-publish step found"
 
 [ "$dl_line" -lt "$clean_line" ] \
-  || fail "$wf: the *.cdx.json cleanup (line $clean_line) must run AFTER actions/download-artifact (line $dl_line), else it is a no-op for the downloaded SBOM"
+  || fail "$wf (publish job): the *.cdx.json cleanup must run AFTER actions/download-artifact, else it is a no-op for the downloaded SBOM"
 [ "$clean_line" -lt "$pub_line" ] \
-  || fail "$wf: the *.cdx.json cleanup (line $clean_line) must run BEFORE the pypa publish (line $pub_line)"
+  || fail "$wf (publish job): the *.cdx.json cleanup must run BEFORE the pypa publish"
 
 echo "OK: release-publish SBOM invariants hold."
