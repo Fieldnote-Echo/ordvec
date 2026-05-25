@@ -61,6 +61,18 @@ pub(crate) fn checked_new_len(current: usize, adding: usize, elems_per_vec: usiz
     new_n
 }
 
+/// Unit-L2 copy of `v`, used by the asymmetric scoring path.
+///
+/// **Degenerate queries are intentional, not errors.** A query with L2 norm
+/// `≤ 1e-12` (the all-zero vector, or one numerically indistinguishable from
+/// it) has no direction, so its unit copy is the zero vector. The asymmetric
+/// score is then `0` for every document: they all tie, and the returned top-k
+/// is an arbitrary — though deterministic, via the `(score, doc_id)`
+/// tie-break — prefix of the corpus. This is the correct outcome for a
+/// retrieval substrate (a directionless query has no nearest neighbour), and
+/// it is deliberately *silent*: the input is finite and valid, so it is not
+/// rejected the way NaN/±Inf are by [`assert_all_finite`]. Callers that treat
+/// an all-zero query as an upstream bug should check `‖q‖` before searching.
 pub(crate) fn l2_normalise(v: &[f32]) -> Vec<f32> {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
     if norm <= 1e-12 {
@@ -344,21 +356,30 @@ impl TopK {
 
     #[inline]
     pub(crate) fn maybe_insert(&mut self, score: f32, idx: usize) {
+        // Convert the doc_id to its i64 storage form once, up front. doc_ids
+        // are `< n_vectors ≤ MAX_VECTORS` (2^26) by the `add` cap, so this
+        // never fails in practice; the checked conversion makes the "a doc_id
+        // must fit i64" contract explicit rather than letting a pathological
+        // `idx` near `usize::MAX` wrap to `-1` and collide with the empty-slot
+        // sentinel (`indices` is pre-filled with `-1`). Hard, not debug: a
+        // silent collision would corrupt results in release. `try_from` also
+        // stays clippy-clean on 32-bit, where `idx <= i64::MAX as usize` would
+        // be an always-true `absurd_extreme_comparison`.
+        let id = i64::try_from(idx).expect("ordvec: doc_id exceeds i64::MAX");
         if self.filled < self.k {
             self.scores[self.filled] = score;
-            self.indices[self.filled] = idx as i64;
+            self.indices[self.filled] = id;
             self.filled += 1;
             if self.filled == self.k {
                 self.recompute_worst();
             }
         } else {
-            // Replace the worst kept entry iff the incoming
-            // `(score, idx)` is strictly better to keep under the
-            // `(score desc, doc_id asc)` order: a higher score, or an
-            // equal score with a lower doc_id. doc_ids are unique per
-            // scan, so this is a total order — the greedy eviction
-            // keeps exactly the top-k set under the composite key.
-            let id = idx as i64;
+            // Replace the worst kept entry iff the incoming `(score, id)` is
+            // strictly better to keep under the `(score desc, doc_id asc)`
+            // order: a higher score, or an equal score with a lower doc_id.
+            // doc_ids are unique per scan, so this is a total order — the
+            // greedy eviction keeps exactly the top-k set under the composite
+            // key.
             let better = score > self.worst_val || (score == self.worst_val && id < self.worst_idx);
             if better {
                 self.scores[self.worst_pos] = score;

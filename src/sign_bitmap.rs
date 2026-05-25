@@ -234,7 +234,15 @@ impl SignBitmap {
     pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let (dim, n_vectors, bitmaps) = crate::rank_io::load_sign_bitmap(path)?;
         let qpv = dim / 64;
-        let expected = n_vectors.saturating_mul(qpv);
+        // `checked_mul` (not `saturating`): on a 32-bit target `n_vectors * qpv`
+        // can overflow `usize`; treat overflow as malformed rather than letting
+        // a saturated `usize::MAX` pass as a plausible length.
+        let expected = n_vectors.checked_mul(qpv).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "TVSB n_vectors * dim/64 overflows usize",
+            )
+        })?;
         if bitmaps.len() != expected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,

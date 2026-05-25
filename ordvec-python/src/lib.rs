@@ -16,6 +16,20 @@
 //! an opaque `PanicException`: constructors and `swap_remove` check their
 //! arguments, `check_width` rejects shape mismatches, `ensure_finite` rejects
 //! NaN/±Inf, and the inline guard rejects non-C-contiguous arrays.
+//!
+//! File paths passed to `write` / `load` are forwarded to the filesystem
+//! unmodified — there is no `..` / traversal sanitisation — so callers must
+//! treat the path as trusted input (see the `ordvec` package docstring).
+//!
+//! Threading: the search / candidate / `add` methods release the GIL
+//! (`py.detach`) around the Rust scan and read the input arrays *in place*
+//! (the `PyReadonlyArray` keeps the buffer alive and blocks rust-numpy-mediated
+//! writes for the call's duration, but a raw Python in-place mutation from
+//! another thread is not tracked). So a caller must not mutate an input array
+//! from another thread while such a call is in progress — the released GIL lets
+//! the write race the read and may yield inconsistent results. This is the
+//! usual contract for GIL-releasing numeric extensions (NumPy behaves the same
+//! way).
 
 use numpy::{IntoPyArray, PyArray1, PyArray2, PyReadonlyArray1, PyReadonlyArray2};
 use pyo3::prelude::*;
@@ -110,7 +124,11 @@ impl Rank {
         })
     }
 
-    fn add(&mut self, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
+    fn __repr__(&self) -> String {
+        format!("Rank(dim={}, n={})", self.inner.dim(), self.inner.len())
+    }
+
+    fn add(&mut self, py: Python<'_>, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
         let arr = vectors.as_array();
         check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
@@ -119,7 +137,17 @@ impl Rank {
             )
         })?;
         ensure_finite(slice)?;
-        self.inner.add(slice);
+        // Release the GIL around the parallel rank-transform / pack so other
+        // Python threads run during a bulk add. `slice` (`&[f32]`) and
+        // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
+        //
+        // SAFETY (detaching on a `&mut self` method): `detach` drops the GIL
+        // but NOT the `&mut self` exclusive borrow — PyO3 holds this object's
+        // runtime borrow flag for the whole call, so another thread that
+        // re-acquires the GIL and tries to touch the SAME object gets a clean
+        // `Already borrowed` RuntimeError, never concurrent mutation. Distinct
+        // objects run freely, which is the point of releasing the GIL.
+        py.detach(|| self.inner.add(slice));
         Ok(())
     }
 
@@ -140,12 +168,12 @@ impl Rank {
             )
         })?;
         ensure_finite(slice)?;
-        let results = self.inner.search(slice, k);
+        let results = py.detach(|| self.inner.search(slice, k));
         let scores = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.scores)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         let indices = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.indices)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         Ok((scores, indices))
     }
@@ -167,12 +195,12 @@ impl Rank {
             )
         })?;
         ensure_finite(slice)?;
-        let results = self.inner.search_asymmetric(slice, k);
+        let results = py.detach(|| self.inner.search_asymmetric(slice, k));
         let scores = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.scores)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         let indices = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.indices)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         Ok((scores, indices))
     }
@@ -268,7 +296,16 @@ impl RankQuant {
         })
     }
 
-    fn add(&mut self, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
+    fn __repr__(&self) -> String {
+        format!(
+            "RankQuant(dim={}, bits={}, n={})",
+            self.inner.dim(),
+            self.inner.bits(),
+            self.inner.len()
+        )
+    }
+
+    fn add(&mut self, py: Python<'_>, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
         let arr = vectors.as_array();
         check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
@@ -277,7 +314,17 @@ impl RankQuant {
             )
         })?;
         ensure_finite(slice)?;
-        self.inner.add(slice);
+        // Release the GIL around the parallel rank-transform / pack so other
+        // Python threads run during a bulk add. `slice` (`&[f32]`) and
+        // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
+        //
+        // SAFETY (detaching on a `&mut self` method): `detach` drops the GIL
+        // but NOT the `&mut self` exclusive borrow — PyO3 holds this object's
+        // runtime borrow flag for the whole call, so another thread that
+        // re-acquires the GIL and tries to touch the SAME object gets a clean
+        // `Already borrowed` RuntimeError, never concurrent mutation. Distinct
+        // objects run freely, which is the point of releasing the GIL.
+        py.detach(|| self.inner.add(slice));
         Ok(())
     }
 
@@ -296,12 +343,12 @@ impl RankQuant {
             )
         })?;
         ensure_finite(slice)?;
-        let results = self.inner.search(slice, k);
+        let results = py.detach(|| self.inner.search(slice, k));
         let scores = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.scores)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         let indices = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.indices)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         Ok((scores, indices))
     }
@@ -322,12 +369,12 @@ impl RankQuant {
             )
         })?;
         ensure_finite(slice)?;
-        let results = self.inner.search_asymmetric(slice, k);
+        let results = py.detach(|| self.inner.search_asymmetric(slice, k));
         let scores = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.scores)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         let indices = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.indices)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         Ok((scores, indices))
     }
@@ -395,7 +442,7 @@ impl RankQuant {
                 "candidate id {bad} out of range (index holds {n} vectors)"
             )));
         }
-        let (scores, ids) = self.inner.search_asymmetric_subset(q_slice, c_slice, k);
+        let (scores, ids) = py.detach(|| self.inner.search_asymmetric_subset(q_slice, c_slice, k));
         Ok((scores.into_pyarray(py), ids.into_pyarray(py)))
     }
 
@@ -465,7 +512,16 @@ impl Bitmap {
         })
     }
 
-    fn add(&mut self, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
+    fn __repr__(&self) -> String {
+        format!(
+            "Bitmap(dim={}, n_top={}, n={})",
+            self.inner.dim(),
+            self.inner.n_top(),
+            self.inner.len()
+        )
+    }
+
+    fn add(&mut self, py: Python<'_>, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
         let arr = vectors.as_array();
         check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
@@ -474,7 +530,17 @@ impl Bitmap {
             )
         })?;
         ensure_finite(slice)?;
-        self.inner.add(slice);
+        // Release the GIL around the parallel rank-transform / pack so other
+        // Python threads run during a bulk add. `slice` (`&[f32]`) and
+        // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
+        //
+        // SAFETY (detaching on a `&mut self` method): `detach` drops the GIL
+        // but NOT the `&mut self` exclusive borrow — PyO3 holds this object's
+        // runtime borrow flag for the whole call, so another thread that
+        // re-acquires the GIL and tries to touch the SAME object gets a clean
+        // `Already borrowed` RuntimeError, never concurrent mutation. Distinct
+        // objects run freely, which is the point of releasing the GIL.
+        py.detach(|| self.inner.add(slice));
         Ok(())
     }
 
@@ -495,12 +561,12 @@ impl Bitmap {
             )
         })?;
         ensure_finite(slice)?;
-        let results = self.inner.search(slice, k);
+        let results = py.detach(|| self.inner.search(slice, k));
         let scores = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.scores)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         let indices = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.indices)
-            .unwrap()
+            .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
             .into_pyarray(py);
         Ok((scores, indices))
     }
@@ -522,7 +588,7 @@ impl Bitmap {
             )
         })?;
         ensure_finite(slice)?;
-        let cands = self.inner.top_m_candidates(slice, m);
+        let cands = py.detach(|| self.inner.top_m_candidates(slice, m));
         Ok(cands.into_pyarray(py))
     }
 
@@ -574,7 +640,7 @@ impl Bitmap {
         batch.checked_mul(n.max(qpv)).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("batch * index size overflows usize")
         })?;
-        let result = self.inner.top_m_candidates_batched(slice, m);
+        let result = py.detach(|| self.inner.top_m_candidates_batched(slice, m));
         let m_eff = m.min(n);
         let total = batch.checked_mul(m_eff).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("result size (batch * m) overflows usize")
@@ -632,9 +698,10 @@ impl Bitmap {
         effective_batch.checked_mul(n.max(qpv)).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("batch_size * index size overflows usize")
         })?;
-        let result = self
-            .inner
-            .top_m_candidates_batched_chunked(slice, m, effective_batch);
+        let result = py.detach(|| {
+            self.inner
+                .top_m_candidates_batched_chunked(slice, m, effective_batch)
+        });
         let m_eff = m.min(n);
         let total = n_queries.checked_mul(m_eff).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("result size (n_queries * m) overflows usize")
@@ -708,8 +775,10 @@ impl Bitmap {
             ));
         }
         let mut out = vec![0u32; ids_slice.len()];
-        self.inner
-            .body_overlap_scores_subset(qb_slice, ids_slice, &mut out);
+        py.detach(|| {
+            self.inner
+                .body_overlap_scores_subset(qb_slice, ids_slice, &mut out)
+        });
         Ok(out.into_pyarray(py))
     }
 
@@ -784,7 +853,15 @@ impl SignBitmap {
         })
     }
 
-    fn add(&mut self, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
+    fn __repr__(&self) -> String {
+        format!(
+            "SignBitmap(dim={}, n={})",
+            self.inner.dim(),
+            self.inner.len()
+        )
+    }
+
+    fn add(&mut self, py: Python<'_>, vectors: PyReadonlyArray2<f32>) -> PyResult<()> {
         let arr = vectors.as_array();
         check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
@@ -793,7 +870,17 @@ impl SignBitmap {
             )
         })?;
         ensure_finite(slice)?;
-        self.inner.add(slice);
+        // Release the GIL around the parallel rank-transform / pack so other
+        // Python threads run during a bulk add. `slice` (`&[f32]`) and
+        // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
+        //
+        // SAFETY (detaching on a `&mut self` method): `detach` drops the GIL
+        // but NOT the `&mut self` exclusive borrow — PyO3 holds this object's
+        // runtime borrow flag for the whole call, so another thread that
+        // re-acquires the GIL and tries to touch the SAME object gets a clean
+        // `Already borrowed` RuntimeError, never concurrent mutation. Distinct
+        // objects run freely, which is the point of releasing the GIL.
+        py.detach(|| self.inner.add(slice));
         Ok(())
     }
 
@@ -814,7 +901,7 @@ impl SignBitmap {
             )
         })?;
         ensure_finite(slice)?;
-        let cands = self.inner.top_m_candidates(slice, m);
+        let cands = py.detach(|| self.inner.top_m_candidates(slice, m));
         Ok(cands.into_pyarray(py))
     }
 
@@ -848,7 +935,7 @@ impl SignBitmap {
         batch.checked_mul(n.max(qpv)).ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("batch * index size overflows usize")
         })?;
-        let result = self.inner.top_m_candidates_batched(slice, m);
+        let result = py.detach(|| self.inner.top_m_candidates_batched(slice, m));
         // m_eff is the per-row width the Rust impl guarantees for every non-empty
         // row; deriving it from `m` and the index size keeps the shape consistent
         // at `batch=0`.
@@ -1128,12 +1215,16 @@ fn search_asymmetric_byte_lut<'py>(
         )
     })?;
     ensure_finite(slice)?;
-    let results = ordvec_core::search_asymmetric_byte_lut(&index.inner, slice, k);
+    // Deref the GIL-bound `PyRef` to a plain `&RankQuant` *before* the closure:
+    // capturing `index` (a `PyRef`) directly would make the closure non-`Ungil`,
+    // but a bare `&ordvec_core::RankQuant` is fine to carry across `detach`.
+    let inner = &index.inner;
+    let results = py.detach(|| ordvec_core::search_asymmetric_byte_lut(inner, slice, k));
     let scores = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.scores)
-        .unwrap()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
         .into_pyarray(py);
     let indices = numpy::ndarray::Array2::from_shape_vec((nq, results.k), results.indices)
-        .unwrap()
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?
         .into_pyarray(py);
     Ok((scores, indices))
 }

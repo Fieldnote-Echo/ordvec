@@ -418,7 +418,15 @@ impl Bitmap {
     pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
         let (dim, n_top, n_vectors, bitmaps) = crate::rank_io::load_bitmap(path)?;
         let qpv = dim / 64;
-        let expected = n_vectors.saturating_mul(qpv);
+        // `checked_mul` (not `saturating`): on a 32-bit target `n_vectors * qpv`
+        // can overflow `usize`; treat overflow as malformed rather than letting
+        // a saturated `usize::MAX` pass as a plausible length.
+        let expected = n_vectors.checked_mul(qpv).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "TVBM n_vectors * dim/64 overflows usize",
+            )
+        })?;
         if bitmaps.len() != expected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -474,6 +482,15 @@ fn bitmap_scan_scalar(bitmaps: &[u64], n: usize, qpv: usize, q: &[u64], top: &mu
 #[target_feature(enable = "avx512f,avx512vpopcntdq")]
 unsafe fn bitmap_scan_avx512vpop(bitmaps: &[u64], n: usize, qpv: usize, q: &[u64], top: &mut TopK) {
     use std::arch::x86_64::*;
+    // SAFETY: every raw 512-bit load is in-bounds under the caller's contract
+    // (`bitmap_scan`): `qpv % 8 == 0` (gated by the `qpv.is_multiple_of(8)`
+    // dispatch check, so `lanes = qpv / 8` tiles `q` and each doc row exactly),
+    // `q.len() == qpv` (one full query row), and `bitmaps.len() == n * qpv` (the
+    // index stores `n` contiguous `qpv`-word rows). Thus `q.as_ptr().add(l*8)`
+    // (`l < qpv/8`) and `doc_ptr.add(l)` at `doc_ptr = bitmaps + di*qpv`
+    // (`di < n`) each stay within their slice. AVX-512 F/VPOPCNTDQ are confirmed
+    // by the `#[target_feature]` gate plus the caller's runtime
+    // `is_x86_feature_detected!`.
     debug_assert_eq!(qpv % 8, 0, "AVX-512 bitmap scan needs qpv % 8 == 0");
     let lanes = qpv / 8;
     let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
@@ -732,6 +749,15 @@ unsafe fn body_overlap_scores_subset_avx512vpop(
     out: &mut [u32],
 ) {
     use std::arch::x86_64::*;
+    // SAFETY: in-bounds under the public `body_overlap_scores_subset`
+    // pre-dispatch asserts: `q_bitmap.len() == qpv` and `qpv % 8 == 0` (the
+    // latter also gated by `qpv.is_multiple_of(8)` in the dispatch), so the
+    // `lanes = qpv/8` loads `q_bitmap.as_ptr().add(l*8)` tile `q_bitmap`
+    // exactly; every `di ∈ doc_ids` is hard-asserted `< n_vectors` *before*
+    // dispatch, so `bitmaps + di*qpv` plus the `lanes` loads stay within the
+    // `n_vectors*qpv`-word buffer; and `out.len() == doc_ids.len()` bounds the
+    // `out[i]` writes. AVX-512 F/VPOPCNTDQ confirmed by `#[target_feature]` +
+    // runtime detection.
     debug_assert_eq!(qpv % 8, 0);
     let lanes = qpv / 8;
     let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);

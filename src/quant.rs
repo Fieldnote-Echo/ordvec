@@ -363,6 +363,15 @@ impl RankQuant {
                 top.finalize_into(out_scores, out_indices);
 
                 if centre_drop_used {
+                    // The asym kernels drop the per-lane `- centre` term from
+                    // the hot loop; it is a query-constant shift, re-applied
+                    // here. Guarded by `is_finite` so it lands only on filled
+                    // slots: when fewer than `k` docs were scored the trailing
+                    // top-k positions stay at the `f32::NEG_INFINITY` sentinel,
+                    // and `NEG_INFINITY + offset` would wrongly turn a sentinel
+                    // into a finite score. (Real scores are always finite — the
+                    // finite-input policy guarantees it — so the guard only ever
+                    // skips sentinels, never a genuine result.)
                     let q_sum: f32 = q_unit.iter().sum();
                     let offset = -centre * q_sum * inv_norm;
                     for s in out_scores.iter_mut() {
@@ -449,7 +458,26 @@ impl RankQuant {
                 format!("TVRQ dim {dim} is not a multiple of codes_per_byte = {codes_per_byte}",),
             ));
         }
-        let expected_bytes = n_vectors.saturating_mul(dim).saturating_mul(bits as usize) / 8;
+        // `checked_mul` (not `saturating`): on a 32-bit target the byte count
+        // `n_vectors * dim * bits / 8` can overflow `usize`; treat overflow as
+        // malformed rather than letting a saturated `usize::MAX` pass as a
+        // plausible length. Two steps with distinct messages so a report names
+        // which product wrapped (`n_vectors * dim` vs the subsequent `* bits`).
+        let nv_dim = n_vectors.checked_mul(dim).ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "TVRQ n_vectors * dim overflows usize",
+            )
+        })?;
+        let expected_bytes = nv_dim
+            .checked_mul(bits as usize)
+            .map(|x| x / 8)
+            .ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "TVRQ (n_vectors * dim) * bits overflows usize",
+                )
+            })?;
         if packed.len() != expected_bytes {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -587,6 +615,10 @@ impl RankQuant {
         let mut local_indices = vec![-1i64; k_eff];
         top.finalize_into(&mut scores, &mut local_indices);
         if centre_drop_used {
+            // Re-apply the per-query centre shift dropped from the kernel hot
+            // loop; the `is_finite` guard skips unfilled top-k slots (still at
+            // the `f32::NEG_INFINITY` sentinel) so a sentinel never becomes a
+            // finite score. See the matching note in `search_asymmetric`.
             for s in scores.iter_mut() {
                 if s.is_finite() {
                     *s += centre_offset;
