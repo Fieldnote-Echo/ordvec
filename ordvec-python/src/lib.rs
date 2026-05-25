@@ -567,7 +567,10 @@ impl Bitmap {
         ensure_finite(slice)?;
         let result = self.inner.top_m_candidates_batched(slice, m);
         let m_eff = m.min(self.inner.len());
-        let mut flat: Vec<u32> = Vec::with_capacity(batch * m_eff);
+        let total = batch.checked_mul(m_eff).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("result size (batch * m) overflows usize")
+        })?;
+        let mut flat: Vec<u32> = Vec::with_capacity(total);
         for row in &result {
             debug_assert_eq!(row.len(), m_eff);
             flat.extend_from_slice(row);
@@ -615,7 +618,10 @@ impl Bitmap {
             .inner
             .top_m_candidates_batched_chunked(slice, m, effective_batch);
         let m_eff = m.min(self.inner.len());
-        let mut flat: Vec<u32> = Vec::with_capacity(n_queries * m_eff);
+        let total = n_queries.checked_mul(m_eff).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("result size (n_queries * m) overflows usize")
+        })?;
+        let mut flat: Vec<u32> = Vec::with_capacity(total);
         for row in &result {
             debug_assert_eq!(row.len(), m_eff);
             flat.extend_from_slice(row);
@@ -812,7 +818,10 @@ impl SignBitmap {
         // row; deriving it from `m` and the index size keeps the shape consistent
         // at `batch=0`.
         let m_eff = m.min(self.inner.len());
-        let mut flat: Vec<u32> = Vec::with_capacity(batch * m_eff);
+        let total = batch.checked_mul(m_eff).ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("result size (batch * m) overflows usize")
+        })?;
+        let mut flat: Vec<u32> = Vec::with_capacity(total);
         for row in &result {
             debug_assert_eq!(row.len(), m_eff);
             flat.extend_from_slice(row);
@@ -965,6 +974,16 @@ fn pack_buckets<'py>(
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
             "len {} must be a multiple of {codes_per_byte} for bits = {bits}",
             slice.len()
+        )));
+    }
+    // Reject out-of-range bucket codes rather than silently masking them: the
+    // core packs `b & ((1 << bits) - 1)`, so a value with high bits set would be
+    // truncated to a different bucket. The bucket alphabet is [0, 1 << bits).
+    let max_code = (1u16 << bits) - 1;
+    if let Some(&bad) = slice.iter().find(|&&b| b as u16 > max_code) {
+        return Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "bucket value {bad} out of range [0, {}) for bits = {bits}",
+            1u16 << bits
         )));
     }
     Ok(ordvec_core::rank::pack_buckets(slice, bits).into_pyarray(py))

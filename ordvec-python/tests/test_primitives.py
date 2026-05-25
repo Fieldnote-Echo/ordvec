@@ -33,10 +33,23 @@ from ordvec import (
 
 def test_rank_transform_matches_numpy_argsort_argsort():
     rng = np.random.default_rng(0)
-    v = rng.standard_normal(256).astype(np.float32)  # no ties w.p. 1
+    v = rng.standard_normal(256).astype(np.float32)
     r = rank_transform(v)
     assert r.dtype == np.uint16
-    np.testing.assert_array_equal(r, np.argsort(np.argsort(v)).astype(np.uint16))
+    # Match the core's "ties broken by index" contract with a stable inner
+    # argsort, so the test is robust even if the float32 cast produces ties
+    # (the outer argsort runs on a permutation, so its sort kind is irrelevant).
+    np.testing.assert_array_equal(
+        r, np.argsort(np.argsort(v, kind="stable")).astype(np.uint16)
+    )
+
+
+def test_rank_transform_breaks_ties_by_index():
+    # Equal values must rank by ascending index (stable), matching the core.
+    v = np.array([1.0, 1.0, 1.0, 1.0], dtype=np.float32)
+    np.testing.assert_array_equal(
+        rank_transform(v), np.array([0, 1, 2, 3], dtype=np.uint16)
+    )
 
 
 def test_rank_transform_rejects_oversize():
@@ -60,12 +73,28 @@ def test_pack_unpack_round_trip():
     np.testing.assert_array_equal(out, buckets)
 
 
+def test_pack_buckets_rejects_out_of_range_codes():
+    # Bucket codes must be in [0, 1<<bits); the core would silently mask
+    # (b & mask), so the binding rejects out-of-range codes with a ValueError.
+    with pytest.raises(ValueError, match="out of range"):
+        pack_buckets(np.array([7, 7, 7, 7], dtype=np.uint8), 2)
+
+
 def test_bucket_ranks_agrees_with_scalar_to_bucket():
     ranks = np.arange(1024, dtype=np.uint16)
     bk = bucket_ranks(ranks, 2)
     assert bk.dtype == np.uint8
     for r in (0, 255, 256, 1023):
         assert int(bk[r]) == rank_to_bucket(int(ranks[r]), 1024, 2)
+
+
+def test_bucket_ranks_empty_returns_empty():
+    # Verified non-panic: the core maps over an empty slice and never calls
+    # rank_to_bucket, so its `d > 0` assert is unreachable for empty input
+    # (and non-empty input always has d >= 1). Pin the empty -> empty contract.
+    out = bucket_ranks(np.array([], dtype=np.uint16), 2)
+    assert out.dtype == np.uint8
+    assert out.shape == (0,)
 
 
 def test_rank_to_bucket_partitions_uniformly():
