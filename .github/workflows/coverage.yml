@@ -1,9 +1,10 @@
 name: coverage
 
-# Measure test coverage with cargo-llvm-cov and upload to Codecov (README badge).
-# Informational, not a required status check. Tokenless upload (supported for
-# public repos); fail_ci_if_error is false so a failed/absent upload never blocks
-# a PR. Activate the repo at https://codecov.io to surface the dashboard + badge.
+# Measure test coverage with cargo-llvm-cov, enforce a regression floor (the
+# "Enforce coverage floor" step below), and upload to Codecov for the README
+# badge. The upload is informational — fail_ci_if_error is false, so a failed or
+# absent upload never blocks a PR. Activate the repo at https://codecov.io to
+# surface the dashboard + badge.
 on:
   push:
     branches: [main]
@@ -39,6 +40,13 @@ jobs:
         run: cargo install cargo-llvm-cov --version 0.8.7 --locked
       - name: Generate coverage (lcov)
         run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+      # Regression floor — reuses the profdata from the lcov step above (no
+      # re-run, so it's fast) and fails the job if line coverage drops below the
+      # floor. A visible regression signal that keeps the OpenSSF silver
+      # statement-coverage criterion honest. The floor sits well under the actual
+      # line coverage (~89%); raise it as coverage grows.
+      - name: Enforce coverage floor
+        run: cargo llvm-cov report --fail-under-lines 85
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
