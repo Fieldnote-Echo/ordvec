@@ -71,7 +71,7 @@ jobs:
           set -euo pipefail
           python -m venv .venv
           . .venv/bin/activate
-          pip install --require-hashes -r ordvec-python/requirements-dev.txt
+          python -m pip install --require-hashes -r ordvec-python/requirements-dev.txt
           cargo llvm-cov show-env --sh > "$RUNNER_TEMP/llvm-cov-env.sh"
           source "$RUNNER_TEMP/llvm-cov-env.sh"
           cargo llvm-cov clean --workspace
