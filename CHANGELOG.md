@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.2.0] - 2026-05-26
 
-First public release on crates.io / PyPI. OrdVec ontology rebrand — index types
-drop the `Index` suffix and the `rank_index` module flattens into the crate root
-— with pre-publish hardening on top. The earlier `0.1.0` / `0.2.0` entries below
-were internal milestones; the crate was never published, so this is the first
-version people see.
+First public release on crates.io / PyPI — the crate was not published before
+this. It pairs the OrdVec ontology rebrand (index types drop the `Index` suffix;
+the `rank_index` module flattens into the crate root) with the pre-publish
+hardening that followed. The `0.1.0` section below records the pre-publish
+internal history.
 
 ### Added
 
