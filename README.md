@@ -72,13 +72,17 @@ Two further paths, for callers who need them:
 ## The bitmap prefilter has a closed-form null
 
 The `Bitmap` prefilter scores candidates by `popcount(Q AND D)` over each
-document's fixed-size top-bucket set. Because both sets are fixed size, the
-overlap of two *unrelated* documents is **hypergeometric** —
-`H(D, n_top, n_top)`, with expected overlap `n_top² / D` under the null (e.g.
-exactly 16 at `D = 256`, `n_top = 64`). So the prefilter is a principled
-statistical test rather than a tunable heuristic: it has a closed-form
-false-positive rate, and an observed overlap can be read against a
-hypergeometric p-value. Details in
+document's fixed-size top-bucket set. Two *unrelated* documents — modelled as
+independent uniform top-bucket sets — overlap **hypergeometrically**,
+`H(D, n_top, n_top)`, with expected overlap `n_top² / D` (e.g. 16 at
+`D = 256`, `n_top = 64`). So the filter's **selectivity** — how often an
+unrelated document clears a given overlap threshold — is closed-form and
+data-independent, not a tuned cutoff. (Whether *true* neighbours clear the bar
+is empirical; this is an exact candidate-generation null, not a
+retrieval-optimality theorem.) The invariance underneath it — that the rank
+transform is unchanged by any strictly monotone reparametrisation of the
+coordinates — is separately machine-checked in Lean, with the formalisation
+accompanying the paper. Details in
 [`docs/RANK_MODES.md`](docs/RANK_MODES.md).
 
 ## Quickstart
@@ -164,8 +168,8 @@ the broader real-corpus evaluation lives in the paper (in progress).*
 ordvec is a **library and substrate**, not a turnkey service: small
 ordinal/sign codes, fast SIMD scoring, and a built-in two-stage prefilter —
 the code-and-scan layer of a retrieval system. It is not a navigable-graph
-index (HNSW) or a distributed serving tier on its own; because the codes are
-small and index-agnostic, they slot **under** an ANN or sharding layer for
+index (HNSW) or a distributed serving tier on its own, yet. The codes are
+small and index-agnostic, so they slot **under** an ANN or sharding layer for
 large-scale serving. Encoding is training-free and data-oblivious by design —
 no codebook fit — so you index the first vector with no prior data and never
 refit as the corpus grows.
