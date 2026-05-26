@@ -1,9 +1,10 @@
 name: coverage
 
-# Measure test coverage with cargo-llvm-cov and upload to Codecov (README badge).
-# Informational, not a required status check. Tokenless upload (supported for
-# public repos); fail_ci_if_error is false so a failed/absent upload never blocks
-# a PR. Activate the repo at https://codecov.io to surface the dashboard + badge.
+# Measure test coverage with cargo-llvm-cov (enforcing a regression floor in the
+# same --all-features run) and upload to Codecov for the README badge. The upload
+# is informational — fail_ci_if_error is false, so a failed or absent upload never
+# blocks a PR. Activate the repo at https://codecov.io to surface the dashboard +
+# badge.
 on:
   push:
     branches: [main]
@@ -37,8 +38,14 @@ jobs:
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: Install cargo-llvm-cov (pinned)
         run: cargo install cargo-llvm-cov --version 0.8.7 --locked
-      - name: Generate coverage (lcov)
-        run: cargo llvm-cov --all-features --lcov --output-path lcov.info
+      # Generate the lcov report AND enforce the regression floor in a single
+      # --all-features invocation, so the floor is computed on exactly the data
+      # that gets uploaded — no separate `report` step that could differ in
+      # feature/package selection. On a regression this command exits non-zero
+      # (so the upload below is skipped). The floor sits well under the actual
+      # line coverage (~89%); raise it as coverage grows.
+      - name: Generate coverage (lcov) + enforce floor
+        run: cargo llvm-cov --all-features --fail-under-lines 85 --lcov --output-path lcov.info
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@e79a6962e0d4c0c17b229090214935d2e33f8354 # v6.0.1
         with:
