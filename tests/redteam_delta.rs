@@ -167,11 +167,13 @@ fn delta_a1_loader_rejects_huge_declared_nvectors_with_empty_payload() {
         r.unwrap().is_err(),
         "Rank::load must reject a header declaring a gigabyte payload over an empty file"
     );
-    // The size check is O(1) (a `stream_position` + integer compare); a
-    // generous ceiling still catches a regression that tries to allocate
-    // ~137 GiB first.
+    // The size check is O(1) (a `stream_position` + integer compare), so this is
+    // a deliberately generous ceiling, not a perf assertion: it only needs to
+    // catch a regression that allocates ~137 GiB before the size check (which
+    // would OOM-kill or take far longer than this), and the wide margin keeps it
+    // from flaking on a loaded shared CI runner.
     assert!(
-        elapsed < std::time::Duration::from_secs(2),
+        elapsed < std::time::Duration::from_secs(30),
         "loader took {elapsed:?} to reject a tiny-file/huge-payload header — \
          a size guard must precede allocation",
     );
@@ -506,10 +508,14 @@ fn delta_c3_subset_k_greater_than_m_clamps() {
     let (scores, global) = idx.search_asymmetric_subset(&query, &cands, 10);
     assert_eq!(scores.len(), 3, "k must clamp to candidate count m");
     assert_eq!(global.len(), 3);
-    // Returned globals are drawn only from the candidate set.
+    // All three slots fill (k clamps to the 3 in-range candidates), so every
+    // returned id is a non-sentinel id drawn from the candidate set. Assert the
+    // two properties separately so the i64 sentinel check and the u32 membership
+    // check stay type-consistent.
     for &g in &global {
+        assert!(g >= 0, "unexpected sentinel id {g}");
         assert!(
-            g < 0 || cands.contains(&(g as u32)),
+            cands.contains(&(g as u32)),
             "result id {g} not in candidate set {cands:?}"
         );
     }

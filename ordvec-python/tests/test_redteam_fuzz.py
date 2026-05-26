@@ -137,7 +137,7 @@ def _run_isolated(body: str) -> subprocess.CompletedProcess:
         [sys.executable, "-c", src],
         capture_output=True,
         text=True,
-        timeout=120,
+        timeout=30,
     )
 
 
