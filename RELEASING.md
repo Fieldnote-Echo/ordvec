@@ -14,8 +14,9 @@ workflows. Nothing ships on a tag push or a merge.
 Both `release-crate.yml` and `release-python.yml`:
 
 - are **`workflow_dispatch`-only** (no `push` / tag trigger);
-- run a **`require-ci-green`** gate confirming `ci.yml` (and, for the wheel,
-  `python.yml`) are green for the target commit on `main`;
+- run a **`require-ci-green`** gate confirming the per-commit CI is green for the
+  target commit on `main` — `ci.yml`, `fuzz.yml`, and `codeql.yml` for the crate,
+  plus `python.yml` for the wheel (a *successful* run for that exact SHA on `main`);
 - publish via **OIDC trusted publishing** (no long-lived crates.io / PyPI
   tokens in the repo);
 - emit **SLSA build provenance** (`actions/attest-build-provenance`) **before**
@@ -55,8 +56,18 @@ Trusted Publishing step.
    sync (`cargo build --locked`).
 2. Bump the version (crate `Cargo.toml`, and `ordvec-python` if the wheel
    changed) and update `CHANGELOG.md`. Commit on `main`.
-3. Confirm CI is **green for that exact `main` SHA** (the dispatch ref must be
-   `main` — the environment will refuse any other branch).
+3. Confirm CI is **green for that exact `main` SHA** — the `require-ci-green`
+   gate needs a *successful* (not cancelled) run of `ci.yml`, `fuzz.yml`,
+   `codeql.yml` (and `python.yml` for the wheel) for that commit on `main`. The
+   dispatch ref must be `main` (the environment refuses any other branch).
+   - **Do not merge another PR between the release commit and the dispatch.**
+     `ci.yml` / `python.yml` use `cancel-in-progress`, so a later push to `main`
+     cancels the release SHA's in-flight CI, and the gate (correctly) will not
+     count a cancelled run. If that happens, re-run the affected workflow for the
+     SHA from the Actions UI, then dispatch.
+   - Release only from a **merge-commit tip** whose CI ran on `main`; a commit
+     that exists in history only inside a merged PR branch has no push-to-main
+     run and so is not releasable.
 4. Get the maintainer's explicit go to publish.
 5. Dispatch `release-crate.yml` (crate) and/or `release-python.yml` (wheel)
    from **`main`**.
