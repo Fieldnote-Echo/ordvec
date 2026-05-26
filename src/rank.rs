@@ -19,7 +19,7 @@
 //! the value, and rank-vector norms are analytical (a permutation of
 //! `{0..D-1}` has fixed L2 norm after mean-centring).
 //!
-//! See `tests/rank.rs` for the round-trip and norm-invariant tests.
+//! See the `tests` module below for the round-trip and norm-invariant tests.
 
 use ordered_float::OrderedFloat;
 use rayon::prelude::*;

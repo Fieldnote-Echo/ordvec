@@ -20,12 +20,13 @@
 //!
 //! All loaders validate header fields *before* allocating the payload
 //! buffer:
-//! * `dim` and `n_vectors` are bounded by [`MAX_DIM`] and [`MAX_VECTORS`].
+//! * `dim` and `n_vectors` are bounded by [`MAX_DIM`] (or
+//!   [`MAX_SIGN_BITMAP_DIM`] for sign bitmaps) and [`MAX_VECTORS`].
 //! * `bits` is checked against `{1, 2, 4}` before any multiplication.
 //! * Total payload size is computed via [`usize::checked_mul`] and
 //!   rejected if it overflows or exceeds the 128 GiB `MAX_PAYLOAD` cap.
-//!   (`MAX_DIM * MAX_VECTORS` alone is ~8 TiB, so `MAX_PAYLOAD` is the
-//!   binding byte ceiling, not the `dim` / `n_vectors` caps.)
+//!   (`MAX_DIM * MAX_VECTORS * 2` bytes alone is ~8 TiB, so `MAX_PAYLOAD`
+//!   is the binding byte ceiling, not the `dim` / `n_vectors` caps.)
 //! * The declared payload must match the file's remaining bytes
 //!   *exactly* — a structurally-valid file with trailing bytes is
 //!   rejected (v1 formats have no footer or reserved trailing section).
