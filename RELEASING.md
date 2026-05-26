@@ -56,15 +56,21 @@ Trusted Publishing step.
    sync (`cargo build --locked`).
 2. Bump the version (crate `Cargo.toml`, and `ordvec-python` if the wheel
    changed) and update `CHANGELOG.md`. Commit on `main`.
-3. Confirm CI is **green for that exact `main` SHA** — the `require-ci-green`
-   gate needs a *successful* (not cancelled) run of `ci.yml`, `fuzz.yml`,
-   `codeql.yml` (and `python.yml` for the wheel) for that commit on `main`. The
-   dispatch ref must be `main` (the environment refuses any other branch).
+3. Confirm CI is **green for current `main` HEAD**. A release dispatches from
+   `main` (the environment refuses any other ref), so `require-ci-green` always
+   checks `main` HEAD's SHA — which needs a **completed, successful** (not
+   cancelled, not in-progress) run of `ci.yml`, `fuzz.yml`, `codeql.yml` (and
+   `python.yml` for the wheel).
    - **Do not merge another PR between the release commit and the dispatch.**
-     `ci.yml` / `python.yml` use `cancel-in-progress`, so a later push to `main`
-     cancels the release SHA's in-flight CI, and the gate (correctly) will not
-     count a cancelled run. If that happens, re-run the affected workflow for the
-     SHA from the Actions UI, then dispatch.
+     `ci.yml` / `python.yml` use `cancel-in-progress`, so merging again moves
+     `main` HEAD and cancels the previous commit's in-flight CI. The superseded
+     commit is no longer the release target: **release from the new HEAD once its
+     own CI has completed green** — never from, or by re-validating, the older
+     commit.
+   - If HEAD's *own* run shows `cancelled` (superseded, but you have since
+     stopped pushing), re-run **that HEAD run** from the Actions UI and wait for
+     it to finish green before dispatching. The SHA you re-run must be the exact
+     SHA you publish; do not hand-clear the gate on any other commit.
    - Release only from a **merge-commit tip** whose CI ran on `main`; a commit
      that exists in history only inside a merged PR branch has no push-to-main
      run and so is not releasable.
