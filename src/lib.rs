@@ -32,6 +32,13 @@
 //! assert_eq!(res.k, 10);
 //! ```
 
+// Every unsafe operation in the crate must sit inside an explicit `unsafe {}`
+// block rather than leaning on an enclosing `unsafe fn`. This keeps the unsafe
+// surface of the SIMD kernels (fastscan / bitmap / sign_bitmap / quant_kernels,
+// plus the NEON popcount in util) visible to every future edit
+// (THREAT_MODEL.md, THREAT-SIMD-001).
+#![deny(unsafe_op_in_unsafe_fn)]
+
 mod bitmap;
 mod fastscan;
 #[cfg(feature = "experimental")]

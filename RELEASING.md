@@ -39,13 +39,15 @@ Trusted Publishing step.
 > These two settings are the supply-chain backstop the workflow code cannot
 > express on its own (THREAT-SUPPLY-001 in [THREAT_MODEL.md](THREAT_MODEL.md)).
 
-### Recommended (open)
+### Tag and branch protection
 
-- A **`v*` tag-protection ruleset** (block update + deletion) and a basic
-  `main` ruleset, so a release tag cannot be force-moved and `main` cannot be
-  force-pushed/deleted (THREAT-SUPPLY-002). Registries are already immutable
-  (crates.io is yank-only; PyPI burns a version on delete), so this closes the
-  remaining GitHub-side mutability surface.
+- **Immutable releases** is enabled, so a published release's `v*` tag cannot be
+  force-moved or deleted and its assets cannot be replaced after publication.
+  This closes the GitHub-side mutability surface the registries already close on
+  their end (crates.io is yank-only; PyPI burns a version on delete).
+- **`main` is a protected branch** — pull-request review is required and
+  force-pushes and deletions are blocked, so the branch a release dispatches
+  from cannot be rewritten (THREAT-SUPPLY-002).
 
 ## Checklist
 

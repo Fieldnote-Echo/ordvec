@@ -491,26 +491,30 @@ unsafe fn bitmap_scan_avx512vpop(bitmaps: &[u64], n: usize, qpv: usize, q: &[u64
     // (`di < n`) each stay within their slice. AVX-512 F/VPOPCNTDQ are confirmed
     // by the `#[target_feature]` gate plus the caller's runtime
     // `is_x86_feature_detected!`.
-    debug_assert_eq!(qpv % 8, 0, "AVX-512 bitmap scan needs qpv % 8 == 0");
-    let lanes = qpv / 8;
-    let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
-    #[allow(clippy::needless_range_loop)] // indexed access is clearer / matches the kernel layout
-    for l in 0..lanes {
-        q_zmms.push(_mm512_loadu_si512(q.as_ptr().add(l * 8) as *const __m512i));
-    }
-    for di in 0..n {
-        let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
-        let mut acc_zmm = _mm512_setzero_si512();
+    // The explicit block is required by `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        debug_assert_eq!(qpv % 8, 0, "AVX-512 bitmap scan needs qpv % 8 == 0");
+        let lanes = qpv / 8;
+        let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
         #[allow(clippy::needless_range_loop)]
         // indexed access is clearer / matches the kernel layout
         for l in 0..lanes {
-            let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
-            let and_zmm = _mm512_and_si512(d_zmm, q_zmms[l]);
-            let pop_zmm = _mm512_popcnt_epi64(and_zmm);
-            acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            q_zmms.push(_mm512_loadu_si512(q.as_ptr().add(l * 8) as *const __m512i));
         }
-        let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
-        top.maybe_insert(acc_sum as f32, di);
+        for di in 0..n {
+            let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+            let mut acc_zmm = _mm512_setzero_si512();
+            #[allow(clippy::needless_range_loop)]
+            // indexed access is clearer / matches the kernel layout
+            for l in 0..lanes {
+                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                let and_zmm = _mm512_and_si512(d_zmm, q_zmms[l]);
+                let pop_zmm = _mm512_popcnt_epi64(and_zmm);
+                acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            }
+            let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
+            top.maybe_insert(acc_sum as f32, di);
+        }
     }
 }
 
@@ -553,25 +557,34 @@ unsafe fn bitmap_scan_collect_avx512vpop(
     scores: &mut [u32],
 ) {
     use std::arch::x86_64::*;
-    debug_assert_eq!(qpv % 8, 0);
-    let lanes = qpv / 8;
-    let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
-    #[allow(clippy::needless_range_loop)] // indexed access is clearer / matches the kernel layout
-    for l in 0..lanes {
-        q_zmms.push(_mm512_loadu_si512(q.as_ptr().add(l * 8) as *const __m512i));
-    }
-    #[allow(clippy::needless_range_loop)] // indexed access is clearer / matches the kernel layout
-    for di in 0..n {
-        let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
-        let mut acc_zmm = _mm512_setzero_si512();
+    // SAFETY: same contract as the sibling `bitmap_scan_avx512vpop` — the caller
+    // (`bitmap_scan_collect`) gates dispatch on `qpv.is_multiple_of(8)`,
+    // `q.len() == qpv`, and `bitmaps.len() == n * qpv`, bounding all raw loads.
+    // AVX-512 F/VPOPCNTDQ confirmed by `#[target_feature]` + runtime detection.
+    // The explicit block is required by `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        debug_assert_eq!(qpv % 8, 0);
+        let lanes = qpv / 8;
+        let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
+        #[allow(clippy::needless_range_loop)]
+        // indexed access is clearer / matches the kernel layout
         for l in 0..lanes {
-            let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
-            let and_zmm = _mm512_and_si512(d_zmm, q_zmms[l]);
-            let pop_zmm = _mm512_popcnt_epi64(and_zmm);
-            acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            q_zmms.push(_mm512_loadu_si512(q.as_ptr().add(l * 8) as *const __m512i));
         }
-        let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
-        scores[di] = acc_sum as u32;
+        #[allow(clippy::needless_range_loop)]
+        // indexed access is clearer / matches the kernel layout
+        for di in 0..n {
+            let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+            let mut acc_zmm = _mm512_setzero_si512();
+            for l in 0..lanes {
+                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                let and_zmm = _mm512_and_si512(d_zmm, q_zmms[l]);
+                let pop_zmm = _mm512_popcnt_epi64(and_zmm);
+                acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            }
+            let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
+            scores[di] = acc_sum as u32;
+        }
     }
 }
 
@@ -635,76 +648,84 @@ unsafe fn bitmap_scan_collect_batched_avx512vpop(
     scores: &mut [u32],
 ) {
     use std::arch::x86_64::*;
-    debug_assert_eq!(qpv % 8, 0);
-    debug_assert_eq!(q_batch.len(), batch * qpv);
-    debug_assert_eq!(scores.len(), batch * n);
-    let lanes = qpv / 8;
-    const CHUNK: usize = BATCHED_AVX512_CHUNK;
+    // SAFETY: same contract as the sibling `bitmap_scan_avx512vpop` — the caller
+    // (`bitmap_scan_collect_batched`) gates dispatch on `qpv.is_multiple_of(8)`,
+    // `q_batch.len() == batch * qpv`, `bitmaps.len() == n * qpv`, and
+    // `scores.len() == batch * n`, bounding all raw loads and `scores[…]` writes.
+    // AVX-512 F/VPOPCNTDQ confirmed by `#[target_feature]` + runtime detection.
+    // The explicit block is required by `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        debug_assert_eq!(qpv % 8, 0);
+        debug_assert_eq!(q_batch.len(), batch * qpv);
+        debug_assert_eq!(scores.len(), batch * n);
+        let lanes = qpv / 8;
+        const CHUNK: usize = BATCHED_AVX512_CHUNK;
 
-    // Pre-load all batch * lanes query ZMMs once. For typical
-    // (batch=8, lanes=2) this is 16 __m512i of register-equivalent
-    // state, which fits in the 32-ZMM file alongside the per-chunk
-    // accs and doc lane temps.
-    let mut q_zmms: Vec<__m512i> = Vec::with_capacity(batch * lanes);
-    for bi in 0..batch {
-        for l in 0..lanes {
-            q_zmms.push(_mm512_loadu_si512(
-                q_batch.as_ptr().add(bi * qpv + l * 8) as *const __m512i
-            ));
-        }
-    }
-
-    // Hot path: process whole CHUNK-sized groups. The inner `for bi
-    // in 0..CHUNK` is bounded by a *const*, so LLVM unrolls it and
-    // promotes the `accs: [__m512i; CHUNK]` stack array to ZMM
-    // registers — that's the property that keeps the kernel
-    // competitive with the single-query AVX-512 path on a per-query
-    // basis, plus the bandwidth amortisation. A runtime-bounded
-    // `0..chunk` loop would force `accs[bi]` to spill to stack
-    // memory and double per-doc latency.
-    let mut chunk_start = 0usize;
-    while chunk_start + CHUNK <= batch {
-        for di in 0..n {
-            let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
-            let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+        // Pre-load all batch * lanes query ZMMs once. For typical
+        // (batch=8, lanes=2) this is 16 __m512i of register-equivalent
+        // state, which fits in the 32-ZMM file alongside the per-chunk
+        // accs and doc lane temps.
+        let mut q_zmms: Vec<__m512i> = Vec::with_capacity(batch * lanes);
+        for bi in 0..batch {
             for l in 0..lanes {
-                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                q_zmms.push(_mm512_loadu_si512(
+                    q_batch.as_ptr().add(bi * qpv + l * 8) as *const __m512i
+                ));
+            }
+        }
+
+        // Hot path: process whole CHUNK-sized groups. The inner `for bi
+        // in 0..CHUNK` is bounded by a *const*, so LLVM unrolls it and
+        // promotes the `accs: [__m512i; CHUNK]` stack array to ZMM
+        // registers — that's the property that keeps the kernel
+        // competitive with the single-query AVX-512 path on a per-query
+        // basis, plus the bandwidth amortisation. A runtime-bounded
+        // `0..chunk` loop would force `accs[bi]` to spill to stack
+        // memory and double per-doc latency.
+        let mut chunk_start = 0usize;
+        while chunk_start + CHUNK <= batch {
+            for di in 0..n {
+                let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
+                let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+                for l in 0..lanes {
+                    let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                    for bi in 0..CHUNK {
+                        let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
+                        let and_zmm = _mm512_and_si512(d_zmm, q_zmm);
+                        let pop_zmm = _mm512_popcnt_epi64(and_zmm);
+                        accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+                    }
+                }
                 for bi in 0..CHUNK {
-                    let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
-                    let and_zmm = _mm512_and_si512(d_zmm, q_zmm);
-                    let pop_zmm = _mm512_popcnt_epi64(and_zmm);
-                    accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+                    let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
+                    scores[(chunk_start + bi) * n + di] = acc_sum as u32;
                 }
             }
-            for bi in 0..CHUNK {
-                let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
-                scores[(chunk_start + bi) * n + di] = acc_sum as u32;
-            }
+            chunk_start += CHUNK;
         }
-        chunk_start += CHUNK;
-    }
-    // Tail path: any remaining `batch % CHUNK` queries. Slower per
-    // doc (runtime-bounded inner loop, accs[bi] may spill) but the
-    // tail runs once per kernel call, not once per doc — total cost
-    // is at most CHUNK-1 queries of slower scan, dominated by the
-    // hot path for any batch > 1.
-    let tail = batch - chunk_start;
-    if tail > 0 {
-        for di in 0..n {
-            let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
-            let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
-            for l in 0..lanes {
-                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
-                for bi in 0..tail {
-                    let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
-                    let and_zmm = _mm512_and_si512(d_zmm, q_zmm);
-                    let pop_zmm = _mm512_popcnt_epi64(and_zmm);
-                    accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+        // Tail path: any remaining `batch % CHUNK` queries. Slower per
+        // doc (runtime-bounded inner loop, accs[bi] may spill) but the
+        // tail runs once per kernel call, not once per doc — total cost
+        // is at most CHUNK-1 queries of slower scan, dominated by the
+        // hot path for any batch > 1.
+        let tail = batch - chunk_start;
+        if tail > 0 {
+            for di in 0..n {
+                let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
+                let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+                for l in 0..lanes {
+                    let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                    for bi in 0..tail {
+                        let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
+                        let and_zmm = _mm512_and_si512(d_zmm, q_zmm);
+                        let pop_zmm = _mm512_popcnt_epi64(and_zmm);
+                        accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+                    }
                 }
-            }
-            for bi in 0..tail {
-                let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
-                scores[(chunk_start + bi) * n + di] = acc_sum as u32;
+                for bi in 0..tail {
+                    let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
+                    scores[(chunk_start + bi) * n + di] = acc_sum as u32;
+                }
             }
         }
     }
@@ -758,27 +779,31 @@ unsafe fn body_overlap_scores_subset_avx512vpop(
     // `n_vectors*qpv`-word buffer; and `out.len() == doc_ids.len()` bounds the
     // `out[i]` writes. AVX-512 F/VPOPCNTDQ confirmed by `#[target_feature]` +
     // runtime detection.
-    debug_assert_eq!(qpv % 8, 0);
-    let lanes = qpv / 8;
-    let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
-    #[allow(clippy::needless_range_loop)] // indexed access is clearer / matches the kernel layout
-    for l in 0..lanes {
-        q_zmms.push(_mm512_loadu_si512(
-            q_bitmap.as_ptr().add(l * 8) as *const __m512i
-        ));
-    }
-    for (i, &di) in doc_ids.iter().enumerate() {
-        let doc_ptr = bitmaps.as_ptr().add((di as usize) * qpv) as *const __m512i;
-        let mut acc_zmm = _mm512_setzero_si512();
+    // The explicit block is required by `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        debug_assert_eq!(qpv % 8, 0);
+        let lanes = qpv / 8;
+        let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
         #[allow(clippy::needless_range_loop)]
         // indexed access is clearer / matches the kernel layout
         for l in 0..lanes {
-            let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
-            let and_zmm = _mm512_and_si512(d_zmm, q_zmms[l]);
-            let pop_zmm = _mm512_popcnt_epi64(and_zmm);
-            acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            q_zmms.push(_mm512_loadu_si512(
+                q_bitmap.as_ptr().add(l * 8) as *const __m512i
+            ));
         }
-        let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
-        out[i] = acc_sum as u32;
+        for (i, &di) in doc_ids.iter().enumerate() {
+            let doc_ptr = bitmaps.as_ptr().add((di as usize) * qpv) as *const __m512i;
+            let mut acc_zmm = _mm512_setzero_si512();
+            #[allow(clippy::needless_range_loop)]
+            // indexed access is clearer / matches the kernel layout
+            for l in 0..lanes {
+                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                let and_zmm = _mm512_and_si512(d_zmm, q_zmms[l]);
+                let pop_zmm = _mm512_popcnt_epi64(and_zmm);
+                acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            }
+            let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
+            out[i] = acc_sum as u32;
+        }
     }
 }
