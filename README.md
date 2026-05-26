@@ -42,7 +42,8 @@ vector on its own:
   library primitives.
 
 ordvec is a compressed **flat-scan** substrate (optionally two-stage): small
-codes scored by fast runtime-dispatched SIMD (AVX-512/AVX2, NEON, wasm128). It
+codes scored by fast SIMD — AVX-512/AVX2 runtime-dispatched on x86_64, baseline
+NEON on aarch64, and `simd128` on wasm32. It
 is the code-and-scan layer, not a navigable-graph index — but the codes are
 small and index-agnostic, so they compose *under* an ANN or sharding layer for
 large-scale serving rather than competing with one.
@@ -74,8 +75,8 @@ Two further paths, for callers who need them:
 The `Bitmap` prefilter scores candidates by `popcount(Q AND D)` over each
 document's fixed-size top-bucket set. Two *unrelated* documents — modelled as
 independent uniform top-bucket sets — overlap **hypergeometrically**,
-`H(D, n_top, n_top)`, with expected overlap `n_top² / D` (e.g. 16 at
-`D = 256`, `n_top = 64`). So the filter's **selectivity** — how often an
+`H(dim, n_top, n_top)`, with expected overlap `n_top² / dim` (e.g. 16 at
+`dim = 256`, `n_top = 64`). So the filter's **selectivity** — how often an
 unrelated document clears a given overlap threshold — is closed-form and
 data-independent, not a tuned cutoff. (Whether *true* neighbours clear the bar
 is empirical; this is an exact candidate-generation null, not a
@@ -168,9 +169,10 @@ the broader real-corpus evaluation lives in the paper (in progress).*
 ordvec is a **library and substrate**, not a turnkey service: small
 ordinal/sign codes, fast SIMD scoring, and a built-in two-stage prefilter —
 the code-and-scan layer of a retrieval system. It is not a navigable-graph
-index (HNSW) or a distributed serving tier on its own, yet. The codes are
-small and index-agnostic, so they slot **under** an ANN or sharding layer for
-large-scale serving. Encoding is training-free and data-oblivious by design —
+index (HNSW) on its own — yet — and not a serving tier at all: ordvec is the
+substrate other systems build on, so its small, index-agnostic codes slot
+**under** an ANN or sharding layer for large-scale serving rather than
+replacing it. Encoding is training-free and data-oblivious by design —
 no codebook fit — so you index the first vector with no prior data and never
 refit as the corpus grows.
 
@@ -234,7 +236,7 @@ Contributions to the code, the docs, and the paper are all welcome — see
 
 ordvec's MSRV is **Rust 1.89** — the release that stabilized the specific
 AVX-512 intrinsics the SIMD kernels compile against (it also clears the 1.87
-floor from `u64::is_multiple_of`). Because the kernels are built against those
+floor from `is_multiple_of`). Because the kernels are built against those
 intrinsics, this is a hard compile floor, not just a convenience pin: a
 toolchain below 1.89 won't build the crate. Raising the MSRV is treated as a
 minor-version change.
