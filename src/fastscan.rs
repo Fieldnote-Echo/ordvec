@@ -243,25 +243,33 @@ unsafe fn scan_b2_fastscan_avx512(
                 let inner_chunks_4 = chunk / 4;
                 let mut pp = p;
 
+                // Score one coord-pair across all 32 lanes: VPSHUFB the per-pair
+                // 16-byte LUT (broadcast into both 128-bit halves) by the packed
+                // nibble codes, widen u8 -> u16, accumulate. `pp` / `block_ptr` /
+                // `lut_u8` / `acc16_*` are captured by name at each call site.
+                // (macro_rules is expanded at compile time, so defining it here
+                // has no runtime cost; it keeps the unrolled body in one place and
+                // is reused by the remainder loop below.)
+                macro_rules! step {
+                    ($off:expr) => {{
+                        let codes256 =
+                            _mm256_loadu_si256(block_ptr.add((pp + $off) * 32) as *const __m256i);
+                        let lut128 = _mm_loadu_si128(
+                            lut_u8.as_ptr().add((pp + $off) * 16) as *const __m128i
+                        );
+                        let lut256 = _mm256_broadcastsi128_si256(lut128);
+                        let contrib = _mm256_shuffle_epi8(lut256, codes256);
+                        let lo128 = _mm256_castsi256_si128(contrib);
+                        let hi128 = _mm256_extracti128_si256(contrib, 1);
+                        let lo256 = _mm256_cvtepu8_epi16(lo128);
+                        let hi256 = _mm256_cvtepu8_epi16(hi128);
+                        acc16_lo = _mm512_add_epi16(acc16_lo, _mm512_castsi256_si512(lo256));
+                        acc16_hi = _mm512_add_epi16(acc16_hi, _mm512_castsi256_si512(hi256));
+                    }};
+                }
+
+                // 4-wide unroll, then the remainder one pair at a time.
                 for _ in 0..inner_chunks_4 {
-                    macro_rules! step {
-                        ($off:expr) => {{
-                            let codes256 = _mm256_loadu_si256(
-                                block_ptr.add((pp + $off) * 32) as *const __m256i
-                            );
-                            let lut128 = _mm_loadu_si128(
-                                lut_u8.as_ptr().add((pp + $off) * 16) as *const __m128i
-                            );
-                            let lut256 = _mm256_broadcastsi128_si256(lut128);
-                            let contrib = _mm256_shuffle_epi8(lut256, codes256);
-                            let lo128 = _mm256_castsi256_si128(contrib);
-                            let hi128 = _mm256_extracti128_si256(contrib, 1);
-                            let lo256 = _mm256_cvtepu8_epi16(lo128);
-                            let hi256 = _mm256_cvtepu8_epi16(hi128);
-                            acc16_lo = _mm512_add_epi16(acc16_lo, _mm512_castsi256_si512(lo256));
-                            acc16_hi = _mm512_add_epi16(acc16_hi, _mm512_castsi256_si512(hi256));
-                        }};
-                    }
                     step!(0);
                     step!(1);
                     step!(2);
@@ -270,16 +278,7 @@ unsafe fn scan_b2_fastscan_avx512(
                 }
 
                 while pp < inner_end {
-                    let codes256 = _mm256_loadu_si256(block_ptr.add(pp * 32) as *const __m256i);
-                    let lut128 = _mm_loadu_si128(lut_u8.as_ptr().add(pp * 16) as *const __m128i);
-                    let lut256 = _mm256_broadcastsi128_si256(lut128);
-                    let contrib = _mm256_shuffle_epi8(lut256, codes256);
-                    let lo128 = _mm256_castsi256_si128(contrib);
-                    let hi128 = _mm256_extracti128_si256(contrib, 1);
-                    let lo256 = _mm256_cvtepu8_epi16(lo128);
-                    let hi256 = _mm256_cvtepu8_epi16(hi128);
-                    acc16_lo = _mm512_add_epi16(acc16_lo, _mm512_castsi256_si512(lo256));
-                    acc16_hi = _mm512_add_epi16(acc16_hi, _mm512_castsi256_si512(hi256));
+                    step!(0);
                     pp += 1;
                 }
 
