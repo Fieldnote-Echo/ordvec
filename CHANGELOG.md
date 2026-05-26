@@ -7,14 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Documentation
+## [0.2.0] - 2026-05-26
 
-- **README pre-release lifts:** a caveated operating-point table from the
-  committed synthetic benchmark; the Bitmap prefilter's hypergeometric null;
-  a "Security: index-file trust" callout; a "Research collaboration" (paper
-  co-authorship) section; a "Scope" section; `RankQuantFastscan` (doc-hidden)
-  and the `experimental` `MultiBucketBitmap` surfaced with caveats; in-progress
-  Python bindings noted; and a more precise MSRV rationale.
+First public release on crates.io / PyPI — the crate was not published before
+this. It pairs the OrdVec ontology rebrand (index types drop the `Index` suffix;
+the `rank_index` module flattens into the crate root) with the pre-publish
+hardening that followed. The `0.1.0` section below records the pre-publish
+internal history.
 
 ### Added
 
@@ -27,6 +26,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Type renames** — the `Index` suffix was dropped across the ordinal family:
+  `RankIndex` → `Rank`, `RankQuantIndex` → `RankQuant`,
+  `BitmapIndex` → `Bitmap`, `SignBitmapIndex` → `SignBitmap`,
+  `MultiBucketBitmapIndex` → `MultiBucketBitmap`,
+  `RankQuantFastscanIndex` → `RankQuantFastscan`.
+- **Module flatten** — the `ordvec::rank_index` submodule was flattened into
+  the crate root (the types stay re-exported at `ordvec::*`); the test tree
+  mirrors this (`tests/rank_index/` → `tests/index/`).
 - **`#![deny(unsafe_op_in_unsafe_fn)]` is now enforced crate-wide** (previously
   only in `fastscan.rs`): every unsafe operation in the `bitmap`, `sign_bitmap`,
   `quant_kernels`, and `util` (NEON) SIMD kernels now sits in an explicit
@@ -39,31 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Python bindings (`ordvec-python`):** raised the floor to **Python 3.10** and
   **numpy 2.0**; the abi3 wheel target moves to `abi3-py310`. Python 3.9 reached
   end-of-life (October 2025) and pytest's CVE-2025-71176 fix dropped 3.9 support.
-
-### Security
-
-- Remediated **GHSA-6w46-j5rx-g56g** / CVE-2025-71176 (pytest vulnerable tmpdir
-  handling) by moving the dev/test toolchain to pytest 9.0.3 on Python ≥3.10.
-
-## [0.2.0] - 2026-05-22
-
-OrdVec ontology rebrand: index types drop the `Index` suffix; the `rank_index`
-module is flattened into the crate root. Root-level `*Index` aliases are
-retained as deprecated shims, but the old `ordvec::rank_index::*` module path
-is removed (breaking for module-path imports; pre-release cleanup, crate
-unpublished).
-
-### Changed
-
-- **Type renames** — the `Index` suffix was dropped across the ordinal family:
-  `RankIndex` → `Rank`, `RankQuantIndex` → `RankQuant`,
-  `BitmapIndex` → `Bitmap`, `SignBitmapIndex` → `SignBitmap`,
-  `MultiBucketBitmapIndex` → `MultiBucketBitmap`,
-  `RankQuantFastscanIndex` → `RankQuantFastscan`.
-- **Module flatten** — the `ordvec::rank_index` submodule was flattened into
-  the crate root (the types stay re-exported at `ordvec::*`); the test tree
-  mirrors this (`tests/rank_index/` → `tests/index/`).
-- **Crate version** bumped to `0.2.0`.
 
 ### Deprecated
 
@@ -80,8 +62,22 @@ these aliases in a future release.
   removed by the flatten, so module-path imports
   (`use ordvec::rank_index::RankQuantIndex;`) no longer resolve. Move to the
   crate-root names (`use ordvec::RankQuant;`) or the deprecated root aliases
-  above. Done as pre-release cleanup while the crate is unpublished, so the
-  published vocabulary is clean before 0.2.0 is the first release people see.
+  above. Done as pre-release cleanup while the crate was unpublished, so the
+  published vocabulary is clean for this first release.
+
+### Security
+
+- Remediated **GHSA-6w46-j5rx-g56g** / CVE-2025-71176 (pytest vulnerable tmpdir
+  handling) by moving the dev/test toolchain to pytest 9.0.3 on Python ≥3.10.
+
+### Documentation
+
+- **README pre-release lifts:** a caveated operating-point table from the
+  committed synthetic benchmark; the Bitmap prefilter's hypergeometric null;
+  a "Security: index-file trust" callout; a "Research collaboration" (paper
+  co-authorship) section; a "Scope" section; `RankQuantFastscan` (doc-hidden)
+  and the `experimental` `MultiBucketBitmap` surfaced with caveats; and a more
+  precise MSRV rationale.
 
 ## [0.1.0] - 2026-05-22
 
