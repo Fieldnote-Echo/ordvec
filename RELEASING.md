@@ -71,9 +71,12 @@ Trusted Publishing step.
      stopped pushing), re-run **that HEAD run** from the Actions UI and wait for
      it to finish green before dispatching. The SHA you re-run must be the exact
      SHA you publish; do not hand-clear the gate on any other commit.
-   - Release only from a **merge-commit tip** whose CI ran on `main`; a commit
-     that exists in history only inside a merged PR branch has no push-to-main
-     run and so is not releasable.
+   - Release only from a commit on `main` with a **successful push-to-main run**
+     of each gated workflow — in practice the tip the merge produced (a squash
+     commit, a rebased tip, or a merge commit), whatever the merge strategy. An
+     interior commit that exists in history only from a PR branch has no
+     push-to-main run (its CI ran as a `pull_request` on the branch) and so is
+     not releasable.
 4. Get the maintainer's explicit go to publish.
 5. Dispatch `release-crate.yml` (crate) and/or `release-python.yml` (wheel)
    from **`main`**.
