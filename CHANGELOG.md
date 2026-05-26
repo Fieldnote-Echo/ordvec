@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **CI fuzz smoke** (`.github/workflows/fuzz.yml`): a bounded cargo-fuzz run on
+  every pull request / push to `main` (60s each over `load_rank`,
+  `load_rankquant`, and `fastscan_b2`) plus a weekly full sweep over all seven
+  targets, so a loader, write→load round-trip, or FastScan-kernel regression
+  surfaces in CI between manual campaigns (THREAT-FUZZ-002). cargo-fuzz is
+  version-pinned and the actions are SHA-pinned.
+
 ### Changed
 
+- **`#![deny(unsafe_op_in_unsafe_fn)]` is now enforced crate-wide** (previously
+  only in `fastscan.rs`): every unsafe operation in the `bitmap`, `sign_bitmap`,
+  `quant_kernels`, and `util` (NEON) SIMD kernels now sits in an explicit
+  `unsafe {}` block, keeping the unsafe surface visible to future edits
+  (THREAT-SIMD-001).
+- **`rank::rank_to_bucket` rejects `rank >= d`** — it now panics (and the Python
+  binding raises `ValueError`) instead of silently clamping the result into
+  range, matching the fail-loud contract of `pack_buckets` / `bucket_centre`.
+  Valid rank vectors (a permutation of `[0, d)`) are unaffected.
 - **Python bindings (`ordvec-python`):** raised the floor to **Python 3.10** and
   **numpy 2.0**; the abi3 wheel target moves to `abi3-py310`. Python 3.9 reached
   end-of-life (October 2025) and pytest's CVE-2025-71176 fix dropped 3.9 support.

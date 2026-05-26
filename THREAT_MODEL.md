@@ -69,7 +69,7 @@ absence of a second maintainer is itself a tracked supply-chain residual
 | **Compute kernels** | `fastscan.rs`, `quant_kernels.rs`, `bitmap.rs`, `sign_bitmap.rs` | Trust established after format validation |
 | **Index API** | `rank.rs`, `quant.rs`, `bitmap.rs`, `sign_bitmap.rs` | Caller-controlled query embeddings |
 | **Python FFI** | `ordvec-python` (PyO3 / maturin) | Python ↔ Rust boundary; NumPy buffers |
-| **CI / supply chain** | 12 GitHub Actions workflows; `Cargo.lock`; crates.io + PyPI | GitHub OIDC, crates.io, PyPI trust chains |
+| **CI / supply chain** | 13 GitHub Actions workflows; `Cargo.lock`; crates.io + PyPI | GitHub OIDC, crates.io, PyPI trust chains |
 
 The `fuzz/` directory holds **seven** cargo-fuzz targets: `load_rank`,
 `load_rankquant`, `load_bitmap`, `load_sign_bitmap` (deserialization);
@@ -161,7 +161,7 @@ to this kernel.
 
 ### 3.2 Risks
 
-**THREAT-SIMD-001 (P1, mitigated this cycle; crate-wide rollout tracked):
+**THREAT-SIMD-001 (P1, mitigated this cycle):
 Unsafe-kernel invariant preservation under future refactors.**
 `scan_b2_fastscan_avx512` safety depends on caller-established invariants —
 `packed_fs.len() == n_blocks * pairs * 32` (formed via `checked_mul`, overflow
@@ -172,11 +172,13 @@ by construction. A future refactor calling the inner function directly could
 bypass the asserts. *Mitigations:* the runtime asserts + the type wrapper are
 the primary boundary; the scalar-vs-SIMD equivalence test
 (`fastscan_b2_top10_matches_avx512_kernel`) guards behavior; and
-**`#![deny(unsafe_op_in_unsafe_fn)]` is now enforced in `fastscan.rs`**, so
-every unsafe operation in the kernel sits in an explicit `unsafe {}` block and
-stays visible to future edits. *Open:* roll the lint out crate-wide to the
-other SIMD modules (`bitmap.rs`, `sign_bitmap.rs`, `quant_kernels.rs`,
-`util.rs` NEON) — tracked as a follow-up.
+**`#![deny(unsafe_op_in_unsafe_fn)]` is now enforced crate-wide** (at the crate
+root in `lib.rs`), so every unsafe operation in every SIMD kernel —
+`fastscan.rs`, `bitmap.rs`, `sign_bitmap.rs`, `quant_kernels.rs`, and the
+`util.rs` NEON popcount — sits in an explicit `unsafe {}` block and stays
+visible to future edits. (The lone exception, `horizontal_sum_avx2`, is
+register-only with no memory access, so its intrinsics are safe under the
+`#[target_feature]` gate and an explicit block would be `unused_unsafe`.)
 
 **THREAT-SIMD-002 (P4, deployment note): Microarchitectural side channels in
 co-tenancy.** `ordvec` does not claim protection against microarchitectural
@@ -237,7 +239,7 @@ applications must validate paths before calling").
 
 ### 5.1 Existing controls (verified)
 
-**Workflow code (all 12 workflows):** third-party actions pinned by commit
+**Workflow code (all 13 workflows):** third-party actions pinned by commit
 SHA; `persist-credentials: false` on every checkout; `permissions: contents:
 read` default. **Release workflows** (`release-crate.yml`, `release-python.yml`)
 are `workflow_dispatch`-only (no tag/push trigger), run a `require-ci-green`
@@ -270,17 +272,22 @@ passkeys on the maintainer account; recruiting a **second owner/maintainer**
 deployment **wait timer** worthwhile (a second party able to cancel a bad
 release during the window). See [`RELEASING.md`](RELEASING.md).
 
-**THREAT-SUPPLY-002 (P3): Release immutability and tag integrity.** Published
-artifacts are **immutable by registry design** — crates.io is yank-only (a
-published version's bytes can never be overwritten) and PyPI burns a version on
-delete (no different artifact may be re-uploaded under the same version). So
-post-publish "silent replacement" of a version is not possible on either
-registry, and consumers can verify artifacts against the SLSA / PEP 740
-provenance above. *Residual (GitHub-side):* `changelog.yml` cuts tagged GitHub
-Releases, but the repo currently has **no tag-protection ruleset and no `main`
-ruleset**, so a tag could be force-moved or a release asset replaced.
-*Mitigation:* add a `v*` **tag ruleset** (block update + deletion) and a basic
-`main` ruleset; optionally enable GitHub immutable releases.
+**THREAT-SUPPLY-002 (mitigated): Release immutability and tag integrity.**
+Published artifacts are **immutable by registry design** — crates.io is
+yank-only (a published version's bytes can never be overwritten) and PyPI burns
+a version on delete (no different artifact may be re-uploaded under the same
+version). So post-publish "silent replacement" of a version is not possible on
+either registry, and consumers can verify artifacts against the SLSA / PEP 740
+provenance above. The GitHub-side mutability surface is now closed too:
+`changelog.yml` cuts tagged GitHub Releases, and **GitHub immutable releases is
+enabled**, so a published release's `v*` tag cannot be force-moved or deleted
+and its assets cannot be replaced after publication; the **`main` branch is
+protected** (pull-request review required, force-pushes and deletions blocked)
+and is the **only deployment branch** permitted for the `pypi` / `crates-io`
+release environments. *Residual:* draft / non-release tags are not covered by
+release immutability, and — as with the registries — these GitHub controls
+ultimately trust the single maintainer account; that residual folds into
+THREAT-SUPPLY-001.
 
 **THREAT-SUPPLY-003 (P3): Typosquatting adjacent names.** Namespace-adjacent
 crate/package names (`ord-vec`, `ordvecs`, `order-vec`) could be registered to
@@ -358,11 +365,15 @@ single-rate compute path, and (new) the FastScan kernel.
 non-AVX-512 CI runners it exercises the scalar reference kernel; under Intel SDE
 it exercises the AVX-512 kernel.
 
-**THREAT-FUZZ-002 (P3): No CI-bound fuzzing for continuous regression.** Fuzzing
-is run manually; there is no CI gate. A bounded weekly smoke job (e.g.
-`-runs=50000` on `load_rank`, `load_rankquant`, and `fastscan_b2`) would catch
-regressions between manual runs. (Low overhead; weighed against maintenance
-budget.)
+**THREAT-FUZZ-002 (mitigated this cycle): CI-bound fuzzing for continuous
+regression.** A `fuzz.yml` workflow now runs a bounded smoke on every pull
+request and push to `main` (`-max_total_time=60` over `load_rank`,
+`load_rankquant`, and `fastscan_b2`) plus a weekly full sweep
+(`-max_total_time=300` over all seven targets), so a regression that
+reintroduces a loader panic / OOM, breaks the write→load round-trip, or
+destabilises the FastScan kernel surfaces in CI rather than only at the next
+manual campaign. cargo-fuzz is version-pinned and the actions are SHA-pinned,
+matching the repo's scheduled-workflow hardening.
 
 *Note on `load_sign_bitmap`:* all bit patterns are structurally valid for sign
 bitmaps (no per-row invariant), so that target is correctly scoped to parser
@@ -386,16 +397,16 @@ blast radius of a compromised dependency separately.
 
 | ID | Category | Owner | Description | Likelihood | Impact | Status / priority |
 |---|---|---|---|---|---|---|
-| THREAT-SIMD-001 | Memory safety | Library | Unsafe-kernel invariant bypass on refactor | Medium | High | **P1** — lint enforced in `fastscan.rs`; crate-wide rollout tracked |
+| THREAT-SIMD-001 | Memory safety | Library | Unsafe-kernel invariant bypass on refactor | Medium | High | **Mitigated** — `unsafe_op_in_unsafe_fn` denied crate-wide + type wrapper + equivalence test |
 | THREAT-FFI-001 | FFI | Binding | Concurrent input mutation during released-GIL call | Medium | Medium | **P2** — documented contract |
 | THREAT-FFI-002 | FFI | Binding | Unsanitized path forwarding | Medium | Medium | **P2** — documented contract |
 | THREAT-SUPPLY-001 | Supply chain | Config | Release config / single-owner | Low | Critical | **Mitigated** (reviewer + main-only); residual = account compromise / 2nd owner |
-| THREAT-SUPPLY-002 | Supply chain | Config | Release immutability / tag integrity | Low | High | **P3** — registries immutable; add tag ruleset |
+| THREAT-SUPPLY-002 | Supply chain | Config | Release immutability / tag integrity | Low | High | **Mitigated** — registries immutable; GitHub immutable releases on + `main` protected |
 | THREAT-SUPPLY-003 | Supply chain | Config | Typosquatting adjacent names | Medium | Medium | P3 |
 | THREAT-QUERY-001 | Resource | Deployment | Batch / `k` exhaustion in serving | Medium | Medium | **P2** — deployment docs |
 | THREAT-QUERY-002 | Resource | Deployment | Panic on contract violation (Rust servers) | Low | Medium | P3 |
 | THREAT-FUZZ-001 | Fuzzing | Library | FastScan path unfuzzed | Medium | High | **Closed** (`fastscan_b2` added) |
-| THREAT-FUZZ-002 | Fuzzing | Library | No CI-bound fuzzing | Medium | Medium | P3 |
+| THREAT-FUZZ-002 | Fuzzing | Library | No CI-bound fuzzing | Medium | Medium | **Mitigated** — `fuzz.yml` PR smoke + weekly sweep |
 | THREAT-DESER-001 | Deserialization | Library | TOCTOU on shared mounts | Very Low | Low | P4 |
 | THREAT-DESER-002 | Provenance | Deployment | Malicious-but-valid index | Medium | High | P3 (docs — `INDEX_PROVENANCE.md`) |
 | THREAT-CICD-001 | CI/CD | Library | Workflow injection via PR metadata | Low | High | P3 — mitigated by `zizmor` |
@@ -409,19 +420,18 @@ blast radius of a compromised dependency separately.
 
 ## 11. Open mitigations
 
-**Done this cycle:** `#![deny(unsafe_op_in_unsafe_fn)]` in `fastscan.rs`
-(SIMD-001); `fastscan_b2` fuzz target (FUZZ-001); release-environment reviewers
-+ main-only deployment (SUPPLY-001); [`docs/INDEX_PROVENANCE.md`](docs/INDEX_PROVENANCE.md)
-(DESER-002); [`RELEASING.md`](RELEASING.md) (SUPPLY-001).
+**Done this cycle:** `#![deny(unsafe_op_in_unsafe_fn)]` enforced **crate-wide**
+across all SIMD modules (SIMD-001); the `fastscan_b2` fuzz target (FUZZ-001)
+plus a CI `fuzz.yml` — PR smoke + weekly sweep (FUZZ-002); the `rank_to_bucket`
+primitive made fail-loud (`rank < d`) to match the rest of the bucket API, with
+matching binding guards; release-environment reviewers + main-only deployment
+(SUPPLY-001); **GitHub immutable releases enabled + `main` branch protection**
+(SUPPLY-002); [`docs/INDEX_PROVENANCE.md`](docs/INDEX_PROVENANCE.md) (DESER-002);
+[`RELEASING.md`](RELEASING.md) (SUPPLY-001).
 
 **Open, low cost:**
 
-1. Add a `v*` tag-protection ruleset (+ basic `main` ruleset) and optionally
-   enable GitHub immutable releases (THREAT-SUPPLY-002).
-2. Roll `#![deny(unsafe_op_in_unsafe_fn)]` out crate-wide across the remaining
-   SIMD modules (THREAT-SIMD-001).
-3. Add a bounded weekly CI fuzz smoke job (THREAT-FUZZ-002).
-4. Document recommended `nq` / `k` / corpus bounds for single-process serving
+1. Document recommended `nq` / `k` / corpus bounds for single-process serving
    in the Rust and Python API docs (THREAT-QUERY-001).
 
 **Later (not release blockers):** a second maintainer/owner (then a release
