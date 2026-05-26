@@ -89,7 +89,8 @@ fn rt1_subset_in_range_matches_reference_popcount() {
     let q: Vec<f32> = (0..DIM).map(|i| ((i * 17) % 89) as f32 - 44.0).collect();
     let qb = idx.build_query_bitmap_fp32(&q);
 
-    // Ascending subset (the public contract requires sorted ids).
+    // Ascending subset (the recommended order for cache locality; sorting
+    // is a performance preference, not a correctness requirement).
     let doc_ids = [0u32, 2, 3, 5];
     let mut out = vec![0u32; doc_ids.len()];
     idx.body_overlap_scores_subset(&qb, &doc_ids, &mut out);

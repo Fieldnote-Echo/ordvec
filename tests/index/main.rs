@@ -1,6 +1,6 @@
 //! Integration tests for the rank-cosine index family.
 //!
-//! Three substrate types and their kernels:
+//! Three kinds of check across the substrate types and their kernels:
 //!
 //! 1. Scalar correctness — each kernel agrees with a hand-written
 //!    reference implementation on the same inputs (top-k indices
@@ -11,8 +11,8 @@
 //! 3. Loader robustness — malformed serialisation files surface as
 //!    `Err`, never panic.
 //!
-//! The file split mirrors `ordvec::index` (`rank.rs`,
-//! `quant.rs`, `bitmap.rs`, `multi_bucket.rs`). Shared corpus +
+//! The file split mirrors the crate's flat per-type modules
+//! (`rank.rs`, `quant.rs`, `bitmap.rs`, `multi_bucket.rs`). Shared corpus +
 //! reference helpers live here; loader fuzz lives here because it
 //! crosses all four loader types (rank, rankquant, bitmap, sign
 //! bitmap) in a single hermetic test.
@@ -26,10 +26,10 @@ use rand_chacha::ChaCha8Rng;
 
 mod bitmap;
 mod fastscan;
-mod rank;
-// `MultiBucketBitmap` is gated behind the `experimental` feature.
 mod finite;
 mod loader_validation;
+mod rank;
+// `MultiBucketBitmap` is gated behind the `experimental` feature.
 #[cfg(feature = "experimental")]
 mod multi_bucket;
 mod quant;

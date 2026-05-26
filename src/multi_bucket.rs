@@ -16,7 +16,7 @@
 //! just rearranges the same sum.
 //!
 //! Storage: `dim × 2^bits / 8` bytes per document
-//! (b=2: 512 B/doc at D=1024 = matches RankQuant b=2;
+//! (b=2: 512 B/doc at D=1024 = 2× RankQuant b=2;
 //!  b=4: 2048 B/doc at D=1024 = 4× RankQuant b=4).
 //!
 //! The full 16×16 (b=4) probe is *not* a faster scoring kernel — it

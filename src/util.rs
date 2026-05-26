@@ -4,8 +4,12 @@
 //!   path (full ranks, bucketed ranks, bitmap overlap).
 //! - [`l2_normalise`] returns the unit-norm copy of a query vector for
 //!   the asymmetric scoring path.
+//! - The checked-allocation guards (`result_buffer_len`, `checked_new_len`),
+//!   the finite-input assert (`assert_all_finite`), and the portable AND/XOR
+//!   popcount reductions (`and_popcount` / `xor_popcount`) round out the
+//!   shared helpers.
 //!
-//! Both items are `pub(crate)` so they are reachable from the sibling
+//! These items are all `pub(crate)` so they are reachable from the sibling
 //! index modules (`rank`, `quant`, `bitmap`, `multi_bucket`, `fastscan`)
 //! but not from outside the crate.
 

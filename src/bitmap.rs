@@ -103,7 +103,7 @@ impl Bitmap {
     pub fn build_query_bitmap_fp32(&self, q: &[f32]) -> Vec<u64> {
         assert_eq!(q.len(), self.dim);
         assert_all_finite(q);
-        // Index the dim sorted by |q[j]| desc; alternative: by q[j] desc.
+        // Index the dim sorted by q[j] desc; alternative: by |q[j]| desc.
         // We use raw value desc so the top bits flag where the query
         // points positively, matching the doc-side semantics.
         let mut idx: Vec<u16> = (0..self.dim as u16).collect();
@@ -178,7 +178,7 @@ impl Bitmap {
     /// streaming top-k buffer (each replacement triggers a linear
     /// recompute_min). Instead we scan once into a contiguous
     /// `Vec<u32>` of all N scores and `select_nth_unstable` the
-    /// top-`m`: O(N + m log m). The 828 KiB temp at N=207k is
+    /// top-`m`: O(N + m log m). The ~808 KiB temp at N=207k is
     /// cheap relative to the cost it saves at M ≥ 1000.
     pub fn top_m_candidates(&self, q: &[f32], m: usize) -> Vec<u32> {
         assert_all_finite(q);
@@ -257,7 +257,7 @@ impl Bitmap {
         // One doc-scan pass writes `batch * n` u32 scores, layout
         // scores[bi * n + di]. At B=8, N=207k that buffer is ~6.6 MB —
         // L3-resident, not per-core L2. The parallel select_nth below
-        // streams one query's ~828 KiB score slice per worker; it backs
+        // streams one query's ~808 KiB score slice per worker; it backs
         // from L3, but the selection is a single linear pass, so it stays
         // bandwidth-bound rather than thrashing a small cache.
         let scores_len = batch

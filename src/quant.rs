@@ -5,9 +5,9 @@
 //! dispatches AVX-512 → AVX2 → scalar via the kernels in
 //! [`crate::quant_kernels`].
 //!
-//! The byte-LUT path ([`search_asymmetric_byte_lut`]) is exposed
-//! publicly via `ordvec::search_asymmetric_byte_lut` so
-//! `examples/bench_rank.rs` can compare it against the production
+//! The byte-LUT path ([`search_asymmetric_byte_lut`]) is re-exported
+//! `#[doc(hidden)]` (reachable as `ordvec::search_asymmetric_byte_lut`)
+//! so `examples/bench_rank.rs` can compare it against the production
 //! AVX path on the same data.
 
 use rayon::prelude::*;
@@ -74,10 +74,12 @@ enum SimdTier {
 /// `dim % (1 << bits) == 0` and `dim % (8 / bits) == 0`, which is
 /// *weaker* than the SIMD invariants (e.g. dim 48 / 80 / 20 are valid
 /// constructor dims that violate them). A kernel whose invariant is
-/// unmet silently drops its trailing chunk in release builds and
-/// returns the wrong top-k. This selector returns the highest tier
-/// whose invariant holds — falling back to [`SimdTier::None`] (scalar
-/// LUT, which handles any valid dim) when neither SIMD tier fits.
+/// unmet hits a hard `assert!` and panics in release — the kernels
+/// enforce their lane invariant in every build, by design. This
+/// selector returns the highest tier whose invariant holds — falling
+/// back to [`SimdTier::None`] (scalar LUT, which handles any valid dim)
+/// when neither SIMD tier fits, so a constructor-valid-but-SIMD-invalid
+/// dim never reaches a kernel that would reject it.
 #[inline]
 fn select_simd_tier(dim: usize, bits: u8) -> SimdTier {
     // SIMD asymmetric kernels exist only for b ∈ {2, 4}. b=1 (and any
@@ -293,9 +295,10 @@ impl RankQuant {
         // processes 8 codes/chunk → needs dim % 8). The constructor only
         // guarantees `dim % (1 << bits) == 0` and `dim % (8 / bits) == 0`,
         // so constructor-valid dims like 48 / 80 / 20 can violate the
-        // SIMD invariant. In release builds the kernels' `debug_assert`
-        // is compiled out and they silently drop the trailing chunk →
-        // wrong top-k. The dispatch below must therefore only select a
+        // SIMD invariant. Each kernel enforces its lane invariant with a
+        // real `assert!` (not a `debug_assert!`), so a mis-dispatch panics
+        // loudly in release rather than silently dropping a chunk. The
+        // dispatch below must therefore only select a
         // tier whose invariant holds for (dim, bits); otherwise it falls
         // back to the scalar LUT path which handles any valid dim.
         #[cfg_attr(not(target_arch = "x86_64"), allow(unused_variables))]
@@ -651,7 +654,7 @@ impl RankQuant {
 //   B=2: 256 groups × 256 entries × 4 B = 256 KiB per query (fits L2)
 //   B=4: 512 groups × 256 entries × 4 B = 512 KiB per query (spills L2 a little)
 //
-// Exposed publicly for benchmarking. Production callers should reach
+// Re-exported `#[doc(hidden)]` for benchmarking. Production callers should reach
 // for [`RankQuant::search_asymmetric`] which dispatches to the
 // fastest implementation for the current CPU.
 // -------------------------------------------------------------------
