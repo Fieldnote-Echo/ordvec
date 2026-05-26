@@ -204,21 +204,30 @@ fn xor_popcount_scalar(doc: &[u64], q: &[u64]) -> u32 {
 #[inline]
 unsafe fn and_popcount_neon(doc: &[u64], q: &[u64]) -> u32 {
     use std::arch::aarch64::*;
-    let qpv = doc.len();
-    let dptr = doc.as_ptr() as *const u8;
-    let qptr = q.as_ptr() as *const u8;
-    let mut acc = 0u32;
-    let mut w = 0usize;
-    while w + 2 <= qpv {
-        let dv = vld1q_u8(dptr.add(w * 8));
-        let qv = vld1q_u8(qptr.add(w * 8));
-        acc += vaddvq_u8(vcntq_u8(vandq_u8(dv, qv))) as u32;
-        w += 2;
+    // SAFETY: NEON is part of the aarch64 baseline ABI — these intrinsics
+    // are unconditionally available on aarch64. The `vld1q_u8` loads read
+    // 16 bytes starting at `dptr/qptr + w*8`; `w + 2 <= qpv` guarantees
+    // both offsets are within the slice (each u64 is 8 bytes, so 2×u64 = 16
+    // bytes). The trailing scalar path reads `doc[w]`/`q[w]` with a safe
+    // slice index. The explicit block is required by
+    // `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        let qpv = doc.len();
+        let dptr = doc.as_ptr() as *const u8;
+        let qptr = q.as_ptr() as *const u8;
+        let mut acc = 0u32;
+        let mut w = 0usize;
+        while w + 2 <= qpv {
+            let dv = vld1q_u8(dptr.add(w * 8));
+            let qv = vld1q_u8(qptr.add(w * 8));
+            acc += vaddvq_u8(vcntq_u8(vandq_u8(dv, qv))) as u32;
+            w += 2;
+        }
+        if w < qpv {
+            acc += (doc[w] & q[w]).count_ones();
+        }
+        acc
     }
-    if w < qpv {
-        acc += (doc[w] & q[w]).count_ones();
-    }
-    acc
 }
 
 /// NEON XOR-popcount (sign-bitmap Hamming); see [`and_popcount_neon`].
@@ -226,21 +235,27 @@ unsafe fn and_popcount_neon(doc: &[u64], q: &[u64]) -> u32 {
 #[inline]
 unsafe fn xor_popcount_neon(doc: &[u64], q: &[u64]) -> u32 {
     use std::arch::aarch64::*;
-    let qpv = doc.len();
-    let dptr = doc.as_ptr() as *const u8;
-    let qptr = q.as_ptr() as *const u8;
-    let mut acc = 0u32;
-    let mut w = 0usize;
-    while w + 2 <= qpv {
-        let dv = vld1q_u8(dptr.add(w * 8));
-        let qv = vld1q_u8(qptr.add(w * 8));
-        acc += vaddvq_u8(vcntq_u8(veorq_u8(dv, qv))) as u32;
-        w += 2;
+    // SAFETY: same contract as `and_popcount_neon` — NEON baseline ABI,
+    // `vld1q_u8` loads bounded by `w + 2 <= qpv`, trailing word via safe
+    // index. The explicit block is required by
+    // `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        let qpv = doc.len();
+        let dptr = doc.as_ptr() as *const u8;
+        let qptr = q.as_ptr() as *const u8;
+        let mut acc = 0u32;
+        let mut w = 0usize;
+        while w + 2 <= qpv {
+            let dv = vld1q_u8(dptr.add(w * 8));
+            let qv = vld1q_u8(qptr.add(w * 8));
+            acc += vaddvq_u8(vcntq_u8(veorq_u8(dv, qv))) as u32;
+            w += 2;
+        }
+        if w < qpv {
+            acc += (doc[w] ^ q[w]).count_ones();
+        }
+        acc
     }
-    if w < qpv {
-        acc += (doc[w] ^ q[w]).count_ones();
-    }
-    acc
 }
 
 /// WASM `simd128` AND-popcount: 16 bytes (2×`u64`) per `u8x16_popcnt`,

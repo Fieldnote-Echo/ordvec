@@ -35,13 +35,6 @@
 //! [`l2_normalise`](crate::util::l2_normalise), and `k` is clamped to
 //! `n_vectors` exactly as the sibling search methods do.
 
-// Make every unsafe operation inside an `unsafe fn` require an explicit
-// `unsafe {}` block rather than leaning on the fn-level `unsafe`. This is
-// defense-in-depth for the AVX-512 FastScan kernel below: it keeps the kernel's
-// unsafe surface visible to future edits. Crate-wide rollout to the other SIMD
-// modules is tracked separately (see THREAT_MODEL.md, THREAT-SIMD-001).
-#![deny(unsafe_op_in_unsafe_fn)]
-
 use rayon::prelude::*;
 
 use crate::rank::{bucket_ranks, rank_transform, rankquant_norm};

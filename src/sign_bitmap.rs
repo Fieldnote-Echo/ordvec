@@ -307,25 +307,34 @@ unsafe fn sign_scan_collect_avx512vpop(
     scores: &mut [u32],
 ) {
     use std::arch::x86_64::*;
-    debug_assert_eq!(qpv % 8, 0);
-    let lanes = qpv / 8;
-    let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
-    #[allow(clippy::needless_range_loop)] // indexed access is clearer / matches the kernel layout
-    for l in 0..lanes {
-        q_zmms.push(_mm512_loadu_si512(q.as_ptr().add(l * 8) as *const __m512i));
-    }
-    #[allow(clippy::needless_range_loop)] // indexed access is clearer / matches the kernel layout
-    for di in 0..n {
-        let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
-        let mut acc_zmm = _mm512_setzero_si512();
+    // SAFETY: mirrors `bitmap_scan_collect_avx512vpop` — the caller
+    // (`sign_scan_collect`) gates dispatch on `qpv.is_multiple_of(8)`,
+    // `q.len() == qpv`, and `bitmaps.len() == n * qpv`, bounding all raw loads.
+    // AVX-512 F/VPOPCNTDQ confirmed by `#[target_feature]` + runtime detection.
+    // The explicit block is required by `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        debug_assert_eq!(qpv % 8, 0);
+        let lanes = qpv / 8;
+        let mut q_zmms: Vec<__m512i> = Vec::with_capacity(lanes);
+        #[allow(clippy::needless_range_loop)]
+        // indexed access is clearer / matches the kernel layout
         for l in 0..lanes {
-            let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
-            let xor_zmm = _mm512_xor_si512(d_zmm, q_zmms[l]);
-            let pop_zmm = _mm512_popcnt_epi64(xor_zmm);
-            acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            q_zmms.push(_mm512_loadu_si512(q.as_ptr().add(l * 8) as *const __m512i));
         }
-        let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
-        scores[di] = acc_sum as u32;
+        #[allow(clippy::needless_range_loop)]
+        // indexed access is clearer / matches the kernel layout
+        for di in 0..n {
+            let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+            let mut acc_zmm = _mm512_setzero_si512();
+            for l in 0..lanes {
+                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                let xor_zmm = _mm512_xor_si512(d_zmm, q_zmms[l]);
+                let pop_zmm = _mm512_popcnt_epi64(xor_zmm);
+                acc_zmm = _mm512_add_epi64(acc_zmm, pop_zmm);
+            }
+            let acc_sum: i64 = _mm512_reduce_add_epi64(acc_zmm);
+            scores[di] = acc_sum as u32;
+        }
     }
 }
 
@@ -380,62 +389,70 @@ unsafe fn sign_scan_collect_batched_avx512vpop(
     scores: &mut [u32],
 ) {
     use std::arch::x86_64::*;
-    debug_assert_eq!(qpv % 8, 0);
-    debug_assert_eq!(q_batch.len(), batch * qpv);
-    debug_assert_eq!(scores.len(), batch * n);
-    let lanes = qpv / 8;
-    const CHUNK: usize = BATCHED_AVX512_CHUNK;
+    // SAFETY: mirrors `bitmap_scan_collect_batched_avx512vpop` — the caller
+    // (`sign_scan_collect_batched`) gates dispatch on `qpv.is_multiple_of(8)`,
+    // `q_batch.len() == batch * qpv`, `bitmaps.len() == n * qpv`, and
+    // `scores.len() == batch * n`, bounding all raw loads and `scores[…]` writes.
+    // AVX-512 F/VPOPCNTDQ confirmed by `#[target_feature]` + runtime detection.
+    // The explicit block is required by `#![deny(unsafe_op_in_unsafe_fn)]`.
+    unsafe {
+        debug_assert_eq!(qpv % 8, 0);
+        debug_assert_eq!(q_batch.len(), batch * qpv);
+        debug_assert_eq!(scores.len(), batch * n);
+        let lanes = qpv / 8;
+        const CHUNK: usize = BATCHED_AVX512_CHUNK;
 
-    let mut q_zmms: Vec<__m512i> = Vec::with_capacity(batch * lanes);
-    for bi in 0..batch {
-        for l in 0..lanes {
-            q_zmms.push(_mm512_loadu_si512(
-                q_batch.as_ptr().add(bi * qpv + l * 8) as *const __m512i
-            ));
-        }
-    }
-
-    // Hot path: CHUNK-sized groups; const-bounded inner bi loop so
-    // LLVM unrolls and promotes the accs array to ZMM registers.
-    let mut chunk_start = 0usize;
-    while chunk_start + CHUNK <= batch {
-        for di in 0..n {
-            let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
-            let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+        let mut q_zmms: Vec<__m512i> = Vec::with_capacity(batch * lanes);
+        for bi in 0..batch {
             for l in 0..lanes {
-                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                q_zmms.push(_mm512_loadu_si512(
+                    q_batch.as_ptr().add(bi * qpv + l * 8) as *const __m512i
+                ));
+            }
+        }
+
+        // Hot path: CHUNK-sized groups; const-bounded inner bi loop so
+        // LLVM unrolls and promotes the accs array to ZMM registers.
+        let mut chunk_start = 0usize;
+        while chunk_start + CHUNK <= batch {
+            for di in 0..n {
+                let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
+                let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+                for l in 0..lanes {
+                    let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                    for bi in 0..CHUNK {
+                        let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
+                        let xor_zmm = _mm512_xor_si512(d_zmm, q_zmm);
+                        let pop_zmm = _mm512_popcnt_epi64(xor_zmm);
+                        accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+                    }
+                }
                 for bi in 0..CHUNK {
-                    let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
-                    let xor_zmm = _mm512_xor_si512(d_zmm, q_zmm);
-                    let pop_zmm = _mm512_popcnt_epi64(xor_zmm);
-                    accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+                    let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
+                    scores[(chunk_start + bi) * n + di] = acc_sum as u32;
                 }
             }
-            for bi in 0..CHUNK {
-                let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
-                scores[(chunk_start + bi) * n + di] = acc_sum as u32;
-            }
+            chunk_start += CHUNK;
         }
-        chunk_start += CHUNK;
-    }
-    // Tail.
-    let tail = batch - chunk_start;
-    if tail > 0 {
-        for di in 0..n {
-            let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
-            let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
-            for l in 0..lanes {
-                let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
-                for bi in 0..tail {
-                    let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
-                    let xor_zmm = _mm512_xor_si512(d_zmm, q_zmm);
-                    let pop_zmm = _mm512_popcnt_epi64(xor_zmm);
-                    accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+        // Tail.
+        let tail = batch - chunk_start;
+        if tail > 0 {
+            for di in 0..n {
+                let mut accs: [__m512i; CHUNK] = [_mm512_setzero_si512(); CHUNK];
+                let doc_ptr = bitmaps.as_ptr().add(di * qpv) as *const __m512i;
+                for l in 0..lanes {
+                    let d_zmm = _mm512_loadu_si512(doc_ptr.add(l));
+                    for bi in 0..tail {
+                        let q_zmm = q_zmms[(chunk_start + bi) * lanes + l];
+                        let xor_zmm = _mm512_xor_si512(d_zmm, q_zmm);
+                        let pop_zmm = _mm512_popcnt_epi64(xor_zmm);
+                        accs[bi] = _mm512_add_epi64(accs[bi], pop_zmm);
+                    }
                 }
-            }
-            for bi in 0..tail {
-                let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
-                scores[(chunk_start + bi) * n + di] = acc_sum as u32;
+                for bi in 0..tail {
+                    let acc_sum: i64 = _mm512_reduce_add_epi64(accs[bi]);
+                    scores[(chunk_start + bi) * n + di] = acc_sum as u32;
+                }
             }
         }
     }
