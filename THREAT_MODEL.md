@@ -120,7 +120,7 @@ not reach).
   persistence API is the index types' `write()` / `load()`, making the
   write→load round-trip a type-level guarantee.
 
-The four loaders are continuously fuzzed (`cargo fuzz`, the `load_*` targets).
+The four loaders are covered by cargo-fuzz targets (the `load_*` targets).
 
 ### 2.2 Index-file risk classes
 

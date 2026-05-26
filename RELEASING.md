@@ -1,6 +1,6 @@
 # Releasing `ordvec`
 
-> **Publish is held.** A real `cargo publish` / `maturin publish` happens only
+> **Publish is held.** A real `cargo publish` / PyPI publish happens only
 > on the maintainer's explicit go. CI never publishes for real — the crate job
 > runs `cargo publish -p ordvec --dry-run --locked`, and the PyPI wheel is
 > `publish = false` on crates.io and ships separately.
