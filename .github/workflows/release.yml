@@ -186,7 +186,9 @@ jobs:
           OUTPUT: RELEASE_NOTES.md
       - name: Create the draft GitHub Release
         # Draft so notes + the auto-attached artifacts/provenance get assembled
-        # before `release-assets` un-drafts. `--verify-tag` ties it to this tag.
+        # by `release-assets-draft`, the publishes then run gated, and
+        # `publish-github-release` un-drafts ONLY after both publishes succeed.
+        # `--verify-tag` ties it to this tag.
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.ref_name }}
@@ -428,8 +430,9 @@ jobs:
     uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
     with:
       base64-subjects: ${{ needs.combine-hashes.outputs.hashes }}
-      # Produce the signed provenance as a workflow artifact ONLY; `release-assets`
-      # is the single owner of all Release uploads (no concurrent writers).
+      # Produce the signed provenance as a workflow artifact ONLY;
+      # `release-assets-draft` is the single owner of all Release uploads
+      # (no concurrent writers).
       upload-assets: false
       provenance-name: ordvec-${{ needs.guard.outputs.version }}.intoto.jsonl
 
