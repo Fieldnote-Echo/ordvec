@@ -52,6 +52,14 @@ fn rankquant_eval_centres(v: &[f32], bits: u8, out: &mut [f32]) {
     }
 }
 
+fn rankquant_eval_buckets(v: &[f32], bits: u8, out: &mut [u8]) {
+    debug_assert_eq!(v.len(), out.len());
+    let ranks = rank_transform(v);
+    for (dst, rank) in out.iter_mut().zip(ranks) {
+        *dst = rank_to_bucket(rank, v.len(), bits);
+    }
+}
+
 /// `B`-bit RankQuant index.
 ///
 /// Each document is encoded by bucketing its rank vector into
@@ -717,11 +725,14 @@ pub fn rankquant_eval_search(
 
     let norm = rankquant_eval_norm(dim, bits);
     let inv_norm_sq = 1.0_f32 / (norm * norm);
-    let mut doc_centres = vec![0.0f32; n * dim];
-    doc_centres
+    let centres: Vec<f32> = (0..(1usize << bits))
+        .map(|bucket| bucket_centre(bucket as u8, bits))
+        .collect();
+    let mut doc_buckets = vec![0u8; n * dim];
+    doc_buckets
         .par_chunks_mut(dim)
         .zip(corpus.par_chunks(dim))
-        .for_each(|(out, doc)| rankquant_eval_centres(doc, bits, out));
+        .for_each(|(out, doc)| rankquant_eval_buckets(doc, bits, out));
 
     let mut scores_flat = vec![0.0f32; buf_len];
     let mut indices_flat = vec![-1i64; buf_len];
@@ -733,8 +744,12 @@ pub fn rankquant_eval_search(
             let mut q_centres = vec![0.0f32; dim];
             rankquant_eval_centres(q, bits, &mut q_centres);
             let mut top = TopK::new(k_eff);
-            for (di, doc) in doc_centres.chunks_exact(dim).enumerate() {
-                let acc: f32 = q_centres.iter().zip(doc).map(|(q, d)| q * d).sum();
+            for (di, doc) in doc_buckets.chunks_exact(dim).enumerate() {
+                let acc: f32 = q_centres
+                    .iter()
+                    .zip(doc)
+                    .map(|(q, &bucket)| q * centres[bucket as usize])
+                    .sum();
                 top.maybe_insert(acc * inv_norm_sq, di);
             }
             top.finalize_into(out_scores, out_indices);

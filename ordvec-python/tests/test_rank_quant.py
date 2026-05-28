@@ -127,12 +127,13 @@ def test_rankquant_eval_search_matches_rankquant_search(bits):
     np.testing.assert_allclose(eval_scores, packed_scores, rtol=1e-6, atol=1e-6)
 
 
-def test_rankquant_eval_search_b3_matches_numpy_reference():
-    vectors = unit_vectors(36, 128, seed=51)
-    queries = unit_vectors(4, 128, seed=52)
+@pytest.mark.parametrize("bits", [1, 2, 3, 4])
+def test_rankquant_eval_search_matches_numpy_reference(bits):
+    vectors = unit_vectors(36, 128, seed=51 + bits)
+    queries = unit_vectors(4, 128, seed=61 + bits)
 
-    scores, ids = rankquant_eval_search(vectors, queries, bits=3, k=9)
-    ref_scores, ref_ids = rankquant_eval_reference(vectors, queries, bits=3, k=9)
+    scores, ids = rankquant_eval_search(vectors, queries, bits=bits, k=9)
+    ref_scores, ref_ids = rankquant_eval_reference(vectors, queries, bits=bits, k=9)
 
     assert scores.shape == (4, 9)
     assert ids.shape == (4, 9)
