@@ -1,0 +1,491 @@
+# Unified, tag-triggered release pipeline for ordvec (crate + Python wheel).
+#
+# Cutting a stable `vMAJOR.MINOR.PATCH` tag fully automates: build (crate +
+# wheels + sdist) -> attest (GitHub artifact attestations) -> SLSA Build-L3
+# provenance -> attach EVERYTHING to a GitHub Release -> un-draft. The two
+# registry publishes (crates.io, PyPI) are the ONLY manual gates: each is bound
+# to a GitHub Environment with Required Reviewers, so it pauses for a human.
+#
+# Why one workflow (not the old three): the GitHub Release assets + the single
+# un-draft must be coordinated by explicit `needs:` edges. The previous
+# `changelog.yml` / `release-crate.yml` / `release-python.yml` triggered
+# independently and could not coordinate the asset attach — which is why v0.2.0
+# was assembled by hand and the attestations were dropped. This file replaces
+# all three.
+#
+# Provenance / attestation, soup to nuts (all genuine, nothing faked):
+#   * SLSA generator -> `*.intoto.jsonl` on the Release  (OpenSSF Scorecard
+#     Signed-Releases provenance probe -> 10/10; SLSA Build L3).
+#   * actions/attest-build-provenance -> GitHub attestation store + a
+#     `*.sigstore.json` bundle on the Release (`gh attestation verify`; also the
+#     Scorecard signing probe -> 8, a backup if the .intoto.jsonl ever regresses).
+#   * gh-action-pypi-publish -> PEP 740 attestations on PyPI (Integrity API).
+#   * crates.io / PyPI publish via Trusted Publishing (OIDC) — NO stored tokens.
+#
+# Fail-closed: `release-assets` and both publishes `needs:` the attest +
+# provenance jobs, so nothing is attached or published unless provenance signed.
+#
+# ONE-TIME SETUP before the first tag on this workflow (publishes fail closed at
+# the gate until done, so this is safe to land first):
+#   * crates.io: ordvec > Settings > Trusted Publishing > edit the GitHub
+#       publisher -> workflow = `release.yml` (env stays `crates-io`).
+#   * PyPI: ordvec > publishing > edit the GitHub publisher -> workflow =
+#       `release.yml` (env stays `pypi`).
+#   * GitHub: Environments `crates-io` and `pypi` each keep their Required
+#       reviewer (the human publish gate).
+#
+# Tag glob is deliberately loose (`v[0-9]*...`); the `guard` job enforces strict
+# SemVer (no leading zeros, no pre-release/build suffix). The tag name is only
+# ever used as the quoted env "$TAG_NAME" / "$VERSION", never interpolated into a
+# run: script (injection-safe).
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+# Serialize releases; never cancel an in-flight publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: gate on a stable SemVer tag
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.semver.outputs.ok }}
+      version: ${{ steps.semver.outputs.version }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Enforce strict SemVer
+        id: semver
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # Each segment is 0 or [1-9][0-9]* (no leading zeros); no suffix.
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ "$TAG_NAME" =~ $semver ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG_NAME is not a stable vMAJOR.MINOR.PATCH tag; skipping release."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  require-ci-green:
+    # A tagged release must not ship a commit whose gates have not gone green.
+    # The build jobs below rebuild + retest, but do NOT cover the core crate's
+    # lint / no-default / experimental / MSRV 1.89 / deps + cargo-deny gates
+    # (ci.yml), the binding's full OS/Python matrix (python.yml), the loader /
+    # FastScan fuzz smoke (fuzz.yml), or the CodeQL scan (codeql.yml). Require
+    # each to have concluded `success` for this exact SHA on main.
+    #
+    # Only per-push-to-main workflows are gated, so a run for the release SHA is
+    # guaranteed to exist: audit.yml is schedule-only; coverage*/scorecard are
+    # advisory/external-flaky; zizmor/actionlint are pre-merge hygiene.
+    name: require full CI green for this commit
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: assert ci.yml, python.yml, fuzz.yml and codeql.yml are green for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Require a SUCCESSFUL run for this SHA *on main* for each workflow.
+          # Filtering on branch as well as head_sha stops a green run for the same
+          # commit on an unrelated branch from satisfying the gate.
+          for wf in ci.yml python.yml fuzz.yml codeql.yml; do
+            ok="$(gh api \
+              "repos/${REPO}/actions/workflows/${wf}/runs?head_sha=${SHA}&branch=main&status=success&per_page=20" \
+              --jq '[.workflow_runs[] | select(.head_branch == "main" and .conclusion == "success")] | length')"
+            echo "successful ${wf} runs for ${SHA} on main: ${ok}"
+            if [ "${ok}" -lt 1 ]; then
+              echo "::error::no successful ${wf} run for ${SHA} on main. Push to main, let CI pass, then re-tag."
+              exit 1
+            fi
+          done
+
+  notes:
+    name: release notes (git-cliff) + draft Release
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the draft GitHub Release
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # full history + tags for git-cliff
+          persist-credentials: false
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+      - name: Create the draft GitHub Release
+        # Draft so notes + the auto-attached artifacts/provenance get assembled
+        # before `release-assets` un-drafts. `--verify-tag` ties it to this tag.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --draft \
+            --verify-tag \
+            --title "$TAG_NAME" \
+            --notes-file RELEASE_NOTES.md
+
+  build-crate:
+    name: build .crate + SBOM
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Package the crate
+        # Emits target/package/ordvec-<version>.crate — the same content
+        # `cargo publish` uploads, so the provenance covers the published artifact.
+        run: cargo package -p ordvec --locked
+      - name: Generate CycloneDX SBOM for the crate
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo cyclonedx --manifest-path Cargo.toml --format json
+      - name: Upload the .crate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-crate
+          path: target/package/*.crate
+          if-no-files-found: error
+      - name: Upload the crate SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-crate
+          path: ordvec.cdx.json
+          if-no-files-found: error
+
+  build-wheels:
+    name: wheel ${{ matrix.platform.target }} (${{ matrix.platform.runner }})
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-latest,  target: x86_64,  manylinux: auto }
+          - { runner: ubuntu-latest,  target: aarch64, manylinux: auto }
+          # No macOS x86_64 (Intel) leg — macos-13 hosted runners don't schedule
+          # for this repo. Intel-mac users install from the sdist (issue #29).
+          - { runner: macos-latest,   target: aarch64, manylinux: auto }
+          - { runner: windows-latest, target: x64,     manylinux: auto }
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Build abi3 wheel (covers CPython 3.10+)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: ordvec-python
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          args: --release --out dist
+          sccache: 'true'
+      # Prove the freshly-built wheel runs before it can be published. The
+      # linux/aarch64 wheel is cross-built under QEMU and can't execute on the x86
+      # host, so it's skipped (covered by python.yml's native arm leg + the
+      # macos-arm64 leg here).
+      - name: Set up Python to test the built wheel
+        if: ${{ !(matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64') }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install the built wheel and run pytest
+        if: ${{ !(matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r ordvec-python/requirements-dev.txt
+          python -m pip install ordvec-python/dist/*.whl
+          python -m pytest ordvec-python/tests -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          path: ordvec-python/dist/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: build sdist + SBOM
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Build the sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: ordvec-python
+          command: sdist
+          args: --out dist
+      # Prove the sdist installs *from source* (compiles the Rust extension via
+      # the maturin PEP 517 backend — a path the prebuilt wheels never exercise).
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Set up Python to test the sdist
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install from the sdist and run pytest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r ordvec-python/requirements-dev.txt
+          python -m pip install ordvec-python/dist/*.tar.gz
+          python -m pytest ordvec-python/tests -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: ordvec-python/dist/*.tar.gz
+          if-no-files-found: error
+      # Binding-crate SBOM — generated once (the wheel is the compiled Rust
+      # extension, so the binding crate's dependency tree is the meaningful BOM).
+      - name: Install cargo-cyclonedx
+        shell: bash
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+      - name: Generate CycloneDX SBOM for the binding crate
+        shell: bash
+        run: cargo cyclonedx --manifest-path ordvec-python/Cargo.toml --format json
+      - name: Upload the binding SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-python
+          path: ordvec-python/ordvec-python.cdx.json
+          if-no-files-found: error
+
+  attest:
+    name: GitHub artifact attestation (+ .sigstore.json bundle)
+    needs: [guard, build-crate, build-wheels, build-sdist]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mint the Sigstore signing cert (OIDC)
+      attestations: write # persist the attestation to the store
+      artifact-metadata: write # create the artifact storage record (GA 2026-01-13)
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect the distributables
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      # One consolidated attestation referencing every subject (v4 behavior).
+      - name: Attest build provenance for crate + wheels + sdist
+        id: attest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/*.crate
+            dist/*.whl
+            dist/*.tar.gz
+      - name: Stage the Sigstore bundle as a release asset
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: cp "$BUNDLE" "ordvec-${VERSION}.sigstore.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sigstore-bundle
+          path: ordvec-*.sigstore.json
+          if-no-files-found: error
+
+  combine-hashes:
+    name: combine artifact digests for SLSA provenance
+    needs: [guard, build-crate, build-wheels, build-sdist]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect the distributables
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Compute one combined base64 sha256sum over all distributables
+        id: hash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          # SLSA generator wants `sha256sum`-format subjects, base64'd, no wrap.
+          echo "hashes=$(sha256sum *.crate *.whl *.tar.gz | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    name: SLSA Build-L3 provenance (.intoto.jsonl)
+    needs: [guard, combine-hashes]
+    if: needs.guard.outputs.ok == 'true'
+    permissions:
+      actions: read # detect the GitHub Actions build environment
+      id-token: write # Sigstore keyless signing of the provenance
+      contents: write # required by the reusable workflow's interface
+    # NOTE: SLSA reusable workflows MUST be pinned to a version TAG, never a SHA —
+    # the generator verifies its own ref to produce non-falsifiable provenance,
+    # and a SHA-pin breaks that trust model. This is the one deliberate exception
+    # to the repo's pin-everything-to-SHA rule (see zizmor allowlist).
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
+    with:
+      base64-subjects: ${{ needs.combine-hashes.outputs.hashes }}
+      # Produce the signed provenance as a workflow artifact ONLY; `release-assets`
+      # is the single owner of all Release uploads (no concurrent writers).
+      upload-assets: false
+      provenance-name: ordvec-${{ needs.guard.outputs.version }}.intoto.jsonl
+
+  release-assets:
+    name: attach all assets to the Release + un-draft
+    needs: [guard, notes, attest, provenance, require-ci-green]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload assets + un-draft the Release
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect everything (artifacts + attestation + provenance)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach distributables, signature and provenance to the Release
+        # SOLE Release-asset writer. SBOMs stay build artifacts (registries don't
+        # host them); the GitHub-native bundle (.sigstore.json) and the SLSA
+        # provenance (.intoto.jsonl) ship with the artifacts they attest.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG_NAME" \
+            dist/*.crate \
+            dist/*.whl \
+            dist/*.tar.gz \
+            dist/*.sigstore.json \
+            dist/*.intoto.jsonl \
+            --clobber
+      - name: Publish the GitHub Release (un-draft)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release edit "$TAG_NAME" --draft=false
+
+  publish-crate:
+    name: publish to crates.io
+    needs: [guard, release-assets]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    environment: crates-io # MANUAL GATE — Required reviewer
+    permissions:
+      contents: read
+      id-token: write # Trusted Publishing (OIDC)
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      # Mint the short-lived crates.io credential immediately before publish so
+      # the ephemeral token's exposure window is minimal. No stored secret.
+      - name: Mint a short-lived crates.io credential (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ordvec --locked
+
+  publish-pypi:
+    name: publish to PyPI
+    needs: [guard, release-assets]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi # MANUAL GATE — Required reviewer
+      url: https://pypi.org/p/ordvec
+    permissions:
+      contents: read
+      id-token: write # Trusted Publishing (OIDC); PEP 740 attestations on by default
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect the wheels + sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      # PyPI accepts ONLY wheels + sdists; drop everything else (SBOMs, the
+      # Sigstore bundle, the SLSA provenance) so the upload doesn't choke.
+      - name: Keep only wheels + sdist in the upload dir
+        run: find dist -type f ! -name '*.whl' ! -name '*.tar.gz' -delete
+      - name: Publish to PyPI (Trusted Publishing; PEP 740 attestations on by default)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist
