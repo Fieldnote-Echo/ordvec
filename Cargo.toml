@@ -56,7 +56,7 @@ opt-level = 3
 # own CI job. The single workspace `Cargo.lock` gains pyo3/numpy + transitives.
 [workspace]
 resolver = "2"
-members = ["ordvec-python"]
+members = ["ordvec-python", "ordvec-ffi"]
 default-members = ["."]
 # fuzz/ is a cargo-fuzz crate built only via `cargo +nightly fuzz`. Keep it out of
 # the workspace so it stays a standalone crate (its own Cargo.lock) and `cargo fuzz`

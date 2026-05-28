@@ -413,6 +413,38 @@ impl Bitmap {
         }
     }
 
+    /// Search a single query against a caller-supplied subset of document IDs.
+    ///
+    /// `doc_ids` are global row ordinals. They may be unsorted and may contain
+    /// duplicates; each entry is scored independently, so duplicate IDs can
+    /// produce duplicate hits. Results are ordered by bitmap-overlap descending,
+    /// then row ID ascending, matching the full-index search tie policy.
+    pub fn search_subset(&self, query: &[f32], doc_ids: &[u32], k: usize) -> (Vec<f32>, Vec<i64>) {
+        assert_eq!(query.len(), self.dim);
+        assert_all_finite(query);
+        let k_eff = k.min(doc_ids.len());
+        if k_eff == 0 {
+            return (Vec::new(), Vec::new());
+        }
+        let q_bitmap = self.build_query_bitmap_fp32(query);
+        let mut scores = vec![0u32; doc_ids.len()];
+        self.body_overlap_scores_subset(&q_bitmap, doc_ids, &mut scores);
+
+        let mut entries: Vec<(u32, u32)> = doc_ids
+            .iter()
+            .copied()
+            .zip(scores)
+            .map(|(row, score)| (score, row))
+            .collect();
+        let cmp = |a: &(u32, u32), b: &(u32, u32)| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1));
+        entries.select_nth_unstable_by(k_eff - 1, cmp);
+        let head = &mut entries[..k_eff];
+        head.sort_unstable_by(cmp);
+        let out_scores = head.iter().map(|(score, _)| *score as f32).collect();
+        let out_indices = head.iter().map(|(_, row)| i64::from(*row)).collect();
+        (out_scores, out_indices)
+    }
+
     pub fn len(&self) -> usize {
         self.n_vectors
     }

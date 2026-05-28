@@ -274,6 +274,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "ordvec-ffi"
+version = "0.1.0"
+dependencies = [
+ "ordvec",
+]
+
+[[package]]
 name = "ordvec-python"
 version = "0.2.0"
 dependencies = [
