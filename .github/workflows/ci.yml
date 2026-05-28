@@ -163,11 +163,12 @@ jobs:
         run: cargo publish -p ordvec --dry-run --locked
 
   # ----------------------------------------------------------------------
-  # Pin the release-publish SBOM invariants. release-*.yml are
-  # workflow_dispatch-only, so their "generate SBOM then publish" flow never runs
-  # in push/PR CI — a generated *.cdx.json once broke both publish paths and would
-  # only have surfaced at manual release. This exercises the invariants every
-  # push/PR (see tests/release_publish_invariants.sh).
+  # Pin the release-publish SBOM invariants. release.yml is tag-triggered (with
+  # the two registry publishes gated behind GitHub Environments), so its
+  # "generate SBOM then publish" flow runs only on a real release — a generated
+  # *.cdx.json once broke both publish paths and would only have surfaced at
+  # release time. This exercises the invariants every push/PR (see
+  # tests/release_publish_invariants.sh).
   # ----------------------------------------------------------------------
   release-guard:
     name: release-publish invariants

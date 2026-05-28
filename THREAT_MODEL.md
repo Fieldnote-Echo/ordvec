@@ -266,11 +266,15 @@ scoped to the wheel.
 
 **THREAT-SUPPLY-001 (mitigated; residual = single-maintainer account
 compromise): Release configuration and ownership.** The release **environments**
-(`pypi`, `crates-io`) now require **approval by the maintainer** and restrict
-deployment to the **`main`** branch only — so a release cannot be dispatched
-from an unmerged or attacker branch, and no publish runs without an explicit
-human approval. The remaining residual is *maintainer-account compromise*: a
-single owner is both dispatcher and approver, so account takeover (or social
+(`pypi`, `crates-io`) require **approval by the maintainer** and restrict
+deployment to the **release-tag pattern `v[0-9]*.[0-9]*.[0-9]*`** (the
+tag-triggered workflow runs on `refs/tags/...`, not `refs/heads/main`, so a
+branch-only allowlist would deadlock publishing — see RELEASING.md). The
+`require-ci-green` gate independently verifies the tag SHA has a successful
+push-event CI run on `main`, and `main` itself is branch-protected (PR review,
+no force-push) — so a release cannot be cut from an unmerged or attacker
+branch, and no publish runs without an explicit human approval. The remaining residual is *maintainer-account compromise*: a
+single owner both cuts the release tag and approves both publishes, so account takeover (or social
 engineering) is not caught by a second human. *Mitigations:* strong 2FA /
 passkeys on the maintainer account; recruiting a **second owner/maintainer**
 (also an open OpenSSF Best-Practices item) — which would additionally make a
