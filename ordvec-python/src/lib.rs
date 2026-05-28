@@ -16,9 +16,9 @@
 //! an opaque `PanicException`: constructors and `swap_remove` check their
 //! arguments, `check_width` rejects shape mismatches, `ensure_finite` rejects
 //! NaN/±Inf, and most array inputs reject non-C-contiguous layouts. Candidate
-//! and doc-id arrays are the exception: non-contiguous integer arrays are
-//! copied through the checked `u32` conversion path unless they hit the
-//! contiguous `uint32` zero-copy fast path.
+//! and doc-id arrays are the exception: contiguous `uint32` arrays are borrowed
+//! zero-copy, non-contiguous `uint32` arrays are copied directly, and other
+//! integer dtypes are copied through the checked `u32` conversion path.
 //!
 //! File paths passed to `write` / `load` are forwarded to the filesystem
 //! unmodified — there is no `..` / traversal sanitisation — so callers must
@@ -147,8 +147,7 @@ fn as_u32_ids_1d<'py>(arr: &Bound<'py, PyAny>, what: &str) -> PyResult<Candidate
         if ro.as_slice().is_ok() {
             return Ok(CandidateIds::Borrowed(ro));
         }
-        let view = ro.as_array();
-        let out = view.iter().copied().collect();
+        let out = ro.as_array().to_vec();
         return Ok(CandidateIds::Owned(out));
     }
 
