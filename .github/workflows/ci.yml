@@ -226,16 +226,13 @@ jobs:
   # kernels instead of the scalar/AVX2 fallback.
   #
   # Pattern adapted from microsoft/DiskANN's CI (also a vector-search crate).
-  # SDE pin is a fixed Intel downloadmirror build, SHA256-verified before it is
-  # unpacked or run; bump the version + checksum together when upgrading. If
-  # Intel ever moves the URL or the bytes change, this job fails loudly (the
-  # gate stays honest) rather than silently skipping AVX-512 coverage.
+  # The local setup-intel-sde action owns the fixed Intel downloadmirror build,
+  # SHA256 verification, and x86_64 runner guard. If Intel ever moves the URL
+  # or the bytes change, this job fails loudly (the gate stays honest) rather
+  # than silently skipping AVX-512 coverage.
   avx512:
     name: avx512 (Intel SDE / Sapphire Rapids)
-    runs-on: ubuntu-latest
-    env:
-      SDE_VERSION: sde-external-10.7.0-2026-02-18-lin
-      SDE_URL_BASE: https://downloadmirror.intel.com/913594
+    runs-on: ubuntu-24.04
     steps:
       - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
         with:
@@ -248,19 +245,11 @@ jobs:
           toolchain: stable
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: install Intel SDE
-        env:
-          # SHA256 of ${SDE_VERSION}.tar.xz — verified before the archive is
-          # unpacked and executed. Bump together with SDE_VERSION.
-          SDE_SHA256: ca3d4086de4acb3faedf9f57b541c6936b7d5e19ae2bf763b6ea933573a0a217
-        run: |
-          set -euo pipefail
-          wget -qO intel-sde.tar.xz "${SDE_URL_BASE}/${SDE_VERSION}.tar.xz"
-          echo "${SDE_SHA256}  intel-sde.tar.xz" | sha256sum -c -
-          mkdir -p "${GITHUB_WORKSPACE}/intel-sde"
-          tar xf intel-sde.tar.xz --strip-components=1 -C "${GITHUB_WORKSPACE}/intel-sde"
-          rm intel-sde.tar.xz
-          "${GITHUB_WORKSPACE}/intel-sde/sde64" --version
+        id: sde
+        uses: ./.github/actions/setup-intel-sde
       - name: sanity-check AVX-512 detection under SDE
+        env:
+          SDE_PATH: ${{ steps.sde.outputs.sde-path }}
         run: |
           set -euo pipefail
           # Prove SDE genuinely exposes AVX-512 to the guest via the SAME
@@ -289,11 +278,11 @@ jobs:
           }
           EOF
           cargo build --release --manifest-path "${RUNNER_TEMP}/sde-probe/Cargo.toml"
-          "${GITHUB_WORKSPACE}/intel-sde/sde64" -spr -- \
+          "${SDE_PATH}" -spr -- \
             "${RUNNER_TEMP}/sde-probe/target/release/sde-probe"
       - name: cargo test under SDE (AVX-512 kernels)
         env:
-          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ github.workspace }}/intel-sde/sde64 -spr --
+          CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ steps.sde.outputs.sde-path }} -spr --
         run: |
           set -euo pipefail
           cargo test
@@ -321,7 +310,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
         with:
           toolchain: stable
-          targets: wasm32-unknown-unknown, wasm32-wasip1
+          components: clippy
+          targets: wasm32-unknown-unknown, wasm32-wasip1, aarch64-unknown-linux-gnu
       - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
       - name: install wasmtime (executes the wasip1 test binary)
         # Pinned release + sha256 verification, instead of `curl | bash` of an
@@ -341,19 +331,30 @@ jobs:
           echo "${sha256}  ${tarball}" | sha256sum -c -
           tar xJf "${tarball}"
           echo "${PWD}/wasmtime-${WASMTIME_VERSION}-${arch}-linux" >> "${GITHUB_PATH}"
-      # RUSTFLAGS is overridden here (dropping the workflow-level -D warnings)
-      # so a warning in rayon's wasm-only code path can't fail the build; the
-      # crate's own code is held to -D warnings by the lint/test jobs on the
-      # same source, and clippy covers the simd128 path locally.
+      # `--no-deps` keeps clippy scoped to this crate; Cargo still compiles
+      # dependencies with its usual `--cap-lints allow`, so third-party
+      # target-only warnings cannot mask warnings in ordvec's cfg-gated code.
+      - name: clippy wasm32-unknown-unknown + simd128 (-D warnings)
+        env:
+          RUSTFLAGS: -D warnings -C target-feature=+simd128
+        run: cargo clippy -p ordvec --lib --target wasm32-unknown-unknown --no-deps -- -D warnings
+      - name: clippy aarch64 NEON (-D warnings)
+        env:
+          RUSTFLAGS: -D warnings
+        run: cargo clippy -p ordvec --lib --target aarch64-unknown-linux-gnu --no-deps -- -D warnings
       - name: build wasm32-unknown-unknown + simd128 (browser / edge target)
         env:
-          RUSTFLAGS: -C target-feature=+simd128
+          RUSTFLAGS: -D warnings -C target-feature=+simd128
         run: cargo build --lib --target wasm32-unknown-unknown
       - name: run the simd128 popcount kernel test under wasmtime
         env:
-          RUSTFLAGS: -C target-feature=+simd128
+          RUSTFLAGS: -D warnings -C target-feature=+simd128
           CARGO_TARGET_WASM32_WASIP1_RUNNER: wasmtime
-        run: cargo test --lib --target wasm32-wasip1 popcount_helpers_match_naive
+        run: |
+          set -euo pipefail
+          log="${RUNNER_TEMP}/wasm-popcount-test.log"
+          cargo test --lib --target wasm32-wasip1 util::tests::popcount_helpers_match_naive -- --exact 2>&1 | tee "$log"
+          grep -Eq 'test result: ok\. 1 passed;' "$log"
 
   # ----------------------------------------------------------------------
   # Benchmark visibility (not a pass/fail perf gate). Runs the self-contained
