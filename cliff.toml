@@ -5,8 +5,8 @@
 # the no-system-deps gate.
 #
 # Used two ways:
-#   * .github/workflows/changelog.yml runs `git cliff --latest` when a vX.Y.Z
-#     tag is pushed, to author that release's GitHub Release notes.
+#   * .github/workflows/release.yml (the `notes` job) runs `git cliff --latest`
+#     when a vX.Y.Z tag is pushed, to author that release's GitHub Release notes.
 #   * Locally, to draft the next CHANGELOG.md section during release prep:
 #       git cliff --unreleased --tag vX.Y.Z
 # Output mirrors the repo's Keep a Changelog 1.1.0 + SemVer layout.

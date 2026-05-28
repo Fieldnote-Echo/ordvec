@@ -1,0 +1,628 @@
+# Unified, tag-triggered release pipeline for ordvec (crate + Python wheel).
+#
+# Cutting a stable `vMAJOR.MINOR.PATCH` tag fully automates: build (crate +
+# wheels + sdist) -> attest (GitHub artifact attestations) -> SLSA Build-L3
+# provenance -> stage EVERYTHING on the DRAFT GitHub Release (`release-assets-
+# draft`) -> gated registry publishes -> un-draft ONLY after BOTH publishes
+# succeed (`publish-github-release`). The two registry publishes (crates.io,
+# PyPI) are the manual gates: each is bound to a GitHub Environment with
+# Required Reviewers, so it pauses for a human.
+#
+# The un-draft-after-publish ordering is deliberate: it prevents a public
+# GitHub Release from existing for a version that crates.io / PyPI later
+# refused. If a publish fails, the Release stays DRAFT and the maintainer
+# investigates / re-runs the failed job, after which `publish-github-release`
+# un-drafts.
+#
+# `publish-crate` proves BYTE-IDENTITY between the .crate served by crates.io
+# and the SLSA-attested artifact on BOTH sides of `cargo publish`:
+#   * pre-publish: downloads the `dist-crate` artifact, re-packages with
+#     `--locked`, sha256-compares — fail-closed BEFORE the OIDC token is
+#     minted (defends against toolchain drift / deterministic-packaging
+#     regression).
+#   * post-publish: downloads the just-published .crate from crates.io and
+#     sha256-compares to the attested artifact — empirical proof that the
+#     bytes crates.io actually serves equal the SLSA-attested bytes
+#     (`cargo publish` runs its own internal packaging step the pre-publish
+#     gate cannot inspect). A mismatch fails closed: `publish-github-release`
+#     never un-drafts the GitHub Release, and the failure is loudly audit-
+#     logged even though the version is then yank-only.
+#
+# Why one workflow (not the old three): the GitHub Release assets + the single
+# un-draft must be coordinated by explicit `needs:` edges. The previous
+# `changelog.yml` / `release-crate.yml` / `release-python.yml` triggered
+# independently and could not coordinate the asset attach — which is why v0.2.0
+# was assembled by hand and the attestations were dropped. This file replaces
+# all three.
+#
+# Provenance / attestation, soup to nuts (all genuine, nothing faked):
+#   * SLSA generator -> `*.intoto.jsonl` on the Release  (OpenSSF Scorecard
+#     Signed-Releases provenance probe -> 10/10; SLSA Build L3).
+#   * actions/attest-build-provenance -> GitHub attestation store + a
+#     `*.sigstore.json` bundle on the Release (`gh attestation verify`; also the
+#     Scorecard signing probe -> 8, a backup if the .intoto.jsonl ever regresses).
+#   * gh-action-pypi-publish -> PEP 740 attestations on PyPI (Integrity API).
+#   * crates.io / PyPI publish via Trusted Publishing (OIDC) — NO stored tokens.
+#
+# Fail-closed: `release-assets-draft` and both publishes `needs:` attest +
+# provenance, so nothing is attached or published unless provenance signed; and
+# `publish-github-release` `needs:` both publishes, so the Release stays DRAFT
+# unless both registry pushes succeed. The signed-release graph is pinned in
+# `tests/release_signed_release_invariants.sh` (run by ci.yml's release-guard
+# on every push/PR) so a future commit can't silently dismantle it.
+#
+# ONE-TIME SETUP before the first tag on this workflow (each fails CLOSED until
+# done, so landing this first is safe):
+#   * crates.io: ordvec > Settings > Trusted Publishing > edit the GitHub
+#       publisher -> workflow = `release.yml` (env stays `crates-io`).
+#   * PyPI: ordvec > publishing > edit the GitHub publisher -> workflow =
+#       `release.yml` (env stays `pypi`).
+#   * GitHub Environments `crates-io` AND `pypi`:
+#       - keep "Required reviewers" (the human publish gate);
+#       - set "Deployment branches and tags" to **Selected branches and tags**
+#         with a single TAG pattern: `v[0-9]*.[0-9]*.[0-9]*`. The old
+#         workflow_dispatch setting (branch = `main` only) would now deadlock
+#         publishing — this workflow runs on `refs/tags/...`, never on
+#         `refs/heads/main`. The "tag must come from main" guarantee is preserved
+#         by `require-ci-green` (which queries `?branch=main&status=success` for
+#         the SHA), plus branch protection on `main`. See RELEASING.md.
+#
+# Tag glob is deliberately loose (`v[0-9]*...`); the `guard` job enforces strict
+# SemVer (no leading zeros, no pre-release/build suffix). The tag name is only
+# ever used as the quoted env "$TAG_NAME" / "$VERSION", never interpolated into a
+# run: script (injection-safe).
+name: release
+
+on:
+  push:
+    tags:
+      - "v[0-9]*.[0-9]*.[0-9]*"
+
+# Globally serialize releases (one release pipeline at a time across all tags)
+# and NEVER cancel an in-flight publish. The group is a constant, not
+# `release-${{ github.ref }}`, because per-tag scoping would allow two tag
+# pipelines to run concurrently — which would race the Release-asset writes
+# and double-book the gated registry pushes.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  guard:
+    name: gate on a stable SemVer tag
+    runs-on: ubuntu-latest
+    outputs:
+      ok: ${{ steps.semver.outputs.ok }}
+      version: ${{ steps.semver.outputs.version }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Enforce strict SemVer
+        id: semver
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          # Each segment is 0 or [1-9][0-9]* (no leading zeros); no suffix.
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'
+          if [[ "$TAG_NAME" =~ $semver ]]; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            echo "version=${TAG_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::$TAG_NAME is not a stable vMAJOR.MINOR.PATCH tag; skipping release."
+            echo "ok=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  require-ci-green:
+    # A tagged release must not ship a commit whose gates have not gone green.
+    # The build jobs below rebuild + retest, but do NOT cover the core crate's
+    # lint / no-default / experimental / MSRV 1.89 / deps + cargo-deny gates
+    # (ci.yml), the binding's full OS/Python matrix (python.yml), the loader /
+    # FastScan fuzz smoke (fuzz.yml), or the CodeQL scan (codeql.yml). Require
+    # each to have concluded `success` for this exact SHA on main.
+    #
+    # Only per-push-to-main workflows are gated, so a run for the release SHA is
+    # guaranteed to exist: audit.yml is schedule-only; coverage*/scorecard are
+    # advisory/external-flaky; zizmor/actionlint are pre-merge hygiene.
+    name: require full CI green for this commit
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: assert ci.yml, python.yml, fuzz.yml and codeql.yml are green for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          # Require a SUCCESSFUL run for this SHA *on main* for each workflow.
+          # Filtering on branch as well as head_sha stops a green run for the same
+          # commit on an unrelated branch from satisfying the gate.
+          for wf in ci.yml python.yml fuzz.yml codeql.yml; do
+            ok="$(gh api \
+              "repos/${REPO}/actions/workflows/${wf}/runs?head_sha=${SHA}&branch=main&status=success&per_page=20" \
+              --jq '[.workflow_runs[] | select(.head_branch == "main" and .conclusion == "success")] | length')"
+            echo "successful ${wf} runs for ${SHA} on main: ${ok}"
+            if [ "${ok}" -lt 1 ]; then
+              echo "::error::no successful ${wf} run for ${SHA} on main. Push to main, let CI pass, then re-tag."
+              exit 1
+            fi
+          done
+
+  notes:
+    name: release notes (git-cliff) + draft Release
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # create the draft GitHub Release
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0 # full history + tags for git-cliff
+          persist-credentials: false
+      - name: Generate release notes
+        uses: orhun/git-cliff-action@f50e11560dce63f7c33227798f90b924471a88b5 # v4.8.0
+        with:
+          config: cliff.toml
+          args: --latest --strip header
+        env:
+          OUTPUT: RELEASE_NOTES.md
+      - name: Create the draft GitHub Release
+        # Draft so notes + the auto-attached artifacts/provenance get assembled
+        # by `release-assets-draft`, the publishes then run gated, and
+        # `publish-github-release` un-drafts ONLY after both publishes succeed.
+        # `--verify-tag` ties it to this tag.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG_NAME" \
+            --draft \
+            --verify-tag \
+            --title "$TAG_NAME" \
+            --notes-file RELEASE_NOTES.md
+
+  build-crate:
+    name: build .crate + SBOM
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Package the crate
+        # Emits target/package/ordvec-<version>.crate — the same content
+        # `cargo publish` uploads, so the provenance covers the published artifact.
+        run: cargo package -p ordvec --locked
+      - name: Generate CycloneDX SBOM for the crate
+        run: |
+          cargo install cargo-cyclonedx --version 0.5.9 --locked
+          cargo cyclonedx --manifest-path Cargo.toml --format json
+      - name: Upload the .crate
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist-crate
+          path: target/package/*.crate
+          if-no-files-found: error
+      - name: Upload the crate SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-crate
+          path: ordvec.cdx.json
+          if-no-files-found: error
+
+  build-wheels:
+    name: wheel ${{ matrix.platform.target }} (${{ matrix.platform.runner }})
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ${{ matrix.platform.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform:
+          - { runner: ubuntu-latest,  target: x86_64,  manylinux: auto }
+          - { runner: ubuntu-latest,  target: aarch64, manylinux: auto }
+          # No macOS x86_64 (Intel) leg — macos-13 hosted runners don't schedule
+          # for this repo. Intel-mac users install from the sdist (issue #29).
+          - { runner: macos-latest,   target: aarch64, manylinux: auto }
+          - { runner: windows-latest, target: x64,     manylinux: auto }
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Build abi3 wheel (covers CPython 3.10+)
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: ordvec-python
+          target: ${{ matrix.platform.target }}
+          manylinux: ${{ matrix.platform.manylinux }}
+          args: --release --out dist
+          # sccache deliberately OFF for release builds. A poisoned sccache entry
+          # could inject code into the shipped wheel (zizmor cache-poisoning,
+          # HIGH); the speedup isn't worth that risk on the release path. The CI
+          # path (`python.yml`) keeps sccache on for the PR/main cadence.
+      # Prove the freshly-built wheel runs before it can be published. The
+      # linux/aarch64 wheel is cross-built under QEMU and can't execute on the x86
+      # host, so it's skipped (covered by python.yml's native arm leg + the
+      # macos-arm64 leg here).
+      - name: Set up Python to test the built wheel
+        if: ${{ !(matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64') }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install the built wheel and run pytest
+        if: ${{ !(matrix.platform.runner == 'ubuntu-latest' && matrix.platform.target == 'aarch64') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r ordvec-python/requirements-dev.txt
+          python -m pip install ordvec-python/dist/*.whl
+          python -m pytest ordvec-python/tests -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: wheels-${{ matrix.platform.runner }}-${{ matrix.platform.target }}
+          path: ordvec-python/dist/*.whl
+          if-no-files-found: error
+
+  build-sdist:
+    name: build sdist + SBOM
+    needs: guard
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Build the sdist
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          working-directory: ordvec-python
+          command: sdist
+          args: --out dist
+      # Prove the sdist installs *from source* (compiles the Rust extension via
+      # the maturin PEP 517 backend — a path the prebuilt wheels never exercise).
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      - name: Set up Python to test the sdist
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.13"
+      - name: Install from the sdist and run pytest
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m pip install --require-hashes -r ordvec-python/requirements-dev.txt
+          python -m pip install ordvec-python/dist/*.tar.gz
+          python -m pytest ordvec-python/tests -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sdist
+          path: ordvec-python/dist/*.tar.gz
+          if-no-files-found: error
+      # Binding-crate SBOM — generated once (the wheel is the compiled Rust
+      # extension, so the binding crate's dependency tree is the meaningful BOM).
+      - name: Install cargo-cyclonedx
+        shell: bash
+        run: cargo install cargo-cyclonedx --version 0.5.9 --locked
+      - name: Generate CycloneDX SBOM for the binding crate
+        shell: bash
+        run: cargo cyclonedx --manifest-path ordvec-python/Cargo.toml --format json
+      - name: Upload the binding SBOM
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sbom-python
+          path: ordvec-python/ordvec-python.cdx.json
+          if-no-files-found: error
+
+  attest:
+    name: GitHub artifact attestation (+ .sigstore.json bundle)
+    needs: [guard, build-crate, build-wheels, build-sdist]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # mint the Sigstore signing cert (OIDC)
+      attestations: write # persist the attestation to the store
+      artifact-metadata: write # create the artifact storage record (GA 2026-01-13)
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect the distributables
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      # One consolidated attestation referencing every subject (v4 behavior).
+      - name: Attest build provenance for crate + wheels + sdist
+        id: attest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          subject-path: |
+            dist/*.crate
+            dist/*.whl
+            dist/*.tar.gz
+      - name: Stage the Sigstore bundle as a release asset
+        env:
+          BUNDLE: ${{ steps.attest.outputs.bundle-path }}
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: cp "$BUNDLE" "ordvec-${VERSION}.sigstore.json"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sigstore-bundle
+          path: ordvec-*.sigstore.json
+          if-no-files-found: error
+
+  combine-hashes:
+    name: combine artifact digests for SLSA provenance
+    needs: [guard, build-crate, build-wheels, build-sdist]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      hashes: ${{ steps.hash.outputs.hashes }}
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect the distributables
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Compute one combined base64 sha256sum over all distributables
+        id: hash
+        working-directory: dist
+        run: |
+          set -euo pipefail
+          # SLSA generator wants `sha256sum`-format subjects, base64'd, no wrap.
+          # `./*.glob` form (not bare `*.glob`) so a hostile filename that starts
+          # with `-` can't be reinterpreted as a sha256sum flag (shellcheck SC2035).
+          echo "hashes=$(sha256sum ./*.crate ./*.whl ./*.tar.gz | base64 -w0)" >> "$GITHUB_OUTPUT"
+
+  provenance:
+    name: SLSA Build-L3 provenance (.intoto.jsonl)
+    needs: [guard, combine-hashes]
+    if: needs.guard.outputs.ok == 'true'
+    permissions:
+      actions: read # detect the GitHub Actions build environment
+      id-token: write # Sigstore keyless signing of the provenance
+      contents: write # required by the reusable workflow's interface
+    # NOTE: SLSA reusable workflows MUST be pinned to a version TAG, never a SHA —
+    # the generator verifies its own ref to produce non-falsifiable provenance,
+    # and a SHA-pin breaks that trust model. This is the one deliberate exception
+    # to the repo's pin-everything-to-SHA rule (see zizmor allowlist).
+    uses: slsa-framework/slsa-github-generator/.github/workflows/generator_generic_slsa3.yml@v2.1.0 # zizmor: ignore[unpinned-uses]
+    with:
+      base64-subjects: ${{ needs.combine-hashes.outputs.hashes }}
+      # Produce the signed provenance as a workflow artifact ONLY;
+      # `release-assets-draft` is the single owner of all Release uploads
+      # (no concurrent writers).
+      upload-assets: false
+      provenance-name: ordvec-${{ needs.guard.outputs.version }}.intoto.jsonl
+
+  release-assets-draft:
+    name: stage all assets on the DRAFT Release (does NOT un-draft)
+    needs: [guard, notes, attest, provenance, require-ci-green]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload assets to the draft Release
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect everything (artifacts + attestation + provenance)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Attach distributables, signature and provenance to the draft Release
+        # SOLE Release-asset writer. SBOMs stay build artifacts (registries don't
+        # host them); the GitHub-native bundle (.sigstore.json) and the SLSA
+        # provenance (.intoto.jsonl) ship with the artifacts they attest.
+        # The Release is left DRAFT — un-drafting happens in
+        # `publish-github-release` only after BOTH registry publishes succeed,
+        # so a partial publish never leaves a "public Release with no
+        # registry artifact" half-state.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG_NAME" \
+            dist/*.crate \
+            dist/*.whl \
+            dist/*.tar.gz \
+            dist/*.sigstore.json \
+            dist/*.intoto.jsonl \
+            --clobber
+
+  publish-crate:
+    name: publish to crates.io
+    needs: [guard, release-assets-draft]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    environment: crates-io # MANUAL GATE — Required reviewer
+    permissions:
+      contents: read
+      id-token: write # Trusted Publishing (OIDC)
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable (2026-03-27)
+        with:
+          toolchain: stable
+      # BYTE-IDENTITY GATE. The .crate cargo publish uploads MUST equal the
+      # .crate the SLSA / attest jobs covered, otherwise the published artifact
+      # isn't the attested one (toolchain drift, non-deterministic packaging,
+      # etc. could quietly diverge). Re-package here with `--locked` and
+      # sha256-compare against the attested artifact produced by `build-crate`.
+      # If they differ, this job fails closed BEFORE the OIDC token is minted
+      # and BEFORE `cargo publish` runs — nothing reaches crates.io.
+      - name: Download the attested .crate (from build-crate)
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist-crate
+          path: attested
+      - name: Re-package the crate (must be byte-identical to the attested .crate)
+        run: cargo package -p ordvec --locked
+      - name: Verify byte-identity vs the attested .crate
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          ATTESTED="attested/ordvec-${VERSION}.crate"
+          PACKAGED="target/package/ordvec-${VERSION}.crate"
+          [ -f "$ATTESTED" ] || { echo "::error::attested .crate not found at $ATTESTED"; exit 1; }
+          [ -f "$PACKAGED" ] || { echo "::error::packaged .crate not found at $PACKAGED"; exit 1; }
+          A_SHA=$(sha256sum "$ATTESTED" | cut -d' ' -f1)
+          P_SHA=$(sha256sum "$PACKAGED" | cut -d' ' -f1)
+          echo "attested sha256: $A_SHA"
+          echo "packaged sha256: $P_SHA"
+          if [ "$A_SHA" != "$P_SHA" ]; then
+            echo "::error::byte-identity check failed — the .crate this publish job would upload differs from the SLSA-attested artifact. Refusing to publish."
+            exit 1
+          fi
+          echo "OK: byte-identity verified ($A_SHA)"
+      # Mint the short-lived crates.io credential immediately before publish so
+      # the ephemeral token's exposure window is minimal. No stored secret.
+      - name: Mint a short-lived crates.io credential (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish -p ordvec --locked
+      # The pre-publish gate above proves `cargo package`'s output matches the
+      # SLSA-attested artifact, but `cargo publish` re-runs `cargo package` ONCE
+      # MORE before uploading. By cargo's deterministic-packaging guarantee the
+      # bytes must be identical — but "must be" is not "is." Download the
+      # just-published .crate from crates.io and sha256-compare to the attested
+      # artifact: this is the empirical proof that the bytes on crates.io equal
+      # the bytes covered by the SLSA provenance. A mismatch fails this job
+      # closed, which (a) prevents `publish-github-release` from un-drafting
+      # the GitHub Release, and (b) leaves an actionable audit-log entry —
+      # even though the crates.io version is then yank-only, the failure is
+      # loudly observable rather than silent.
+      - name: Post-publish byte-identity (download from crates.io == attested)
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
+        run: |
+          set -euo pipefail
+          ATTESTED="attested/ordvec-${VERSION}.crate"
+          [ -f "$ATTESTED" ] || { echo "::error::attested .crate missing at $ATTESTED"; exit 1; }
+          A_SHA=$(sha256sum "$ATTESTED" | cut -d' ' -f1)
+          # crates.io's stable download endpoint (follows redirect to the CDN).
+          # CDN propagation can take a few seconds after publish — retry briefly.
+          URL="https://crates.io/api/v1/crates/ordvec/${VERSION}/download"
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+            if curl -fsSL "$URL" -o /tmp/published.crate; then break; fi
+            echo "  waiting for crates.io to serve ordvec ${VERSION} (${i}/12)..."
+            sleep 5
+          done
+          [ -s /tmp/published.crate ] \
+            || { echo "::error::could not download published .crate from $URL after retries"; exit 1; }
+          P_SHA=$(sha256sum /tmp/published.crate | cut -d' ' -f1)
+          echo "attested:         $A_SHA"
+          echo "crates.io-served: $P_SHA"
+          if [ "$A_SHA" != "$P_SHA" ]; then
+            echo "::error::PUBLISHED .crate on crates.io is NOT byte-identical to the SLSA-attested artifact ($P_SHA != $A_SHA). The version is now on crates.io (yank-only) but the GitHub Release will NOT un-draft. Investigate immediately."
+            exit 1
+          fi
+          echo "OK: crates.io-served .crate is byte-identical to the SLSA-attested artifact ($A_SHA)."
+
+  publish-pypi:
+    name: publish to PyPI
+    needs: [guard, release-assets-draft]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi # MANUAL GATE — Required reviewer
+      url: https://pypi.org/p/ordvec
+    permissions:
+      contents: read
+      id-token: write # Trusted Publishing (OIDC); PEP 740 attestations on by default
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      - name: Collect the wheels + sdist
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      # PyPI accepts ONLY wheels + sdists; drop everything else (SBOMs, the
+      # Sigstore bundle, the SLSA provenance) so the upload doesn't choke.
+      - name: Keep only wheels + sdist in the upload dir
+        run: find dist -type f ! -name '*.whl' ! -name '*.tar.gz' -delete
+      - name: Publish to PyPI (Trusted Publishing; PEP 740 attestations on by default)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # v1.14.0
+        with:
+          packages-dir: dist
+
+  publish-github-release:
+    name: un-draft the GitHub Release (only after BOTH registry publishes succeed)
+    needs: [guard, publish-crate, publish-pypi]
+    if: needs.guard.outputs.ok == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # un-draft the Release
+    steps:
+      - name: Harden the runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+      # Un-drafting ONLY here, after both registry publishes have succeeded,
+      # is what prevents a public GitHub Release from existing for a version
+      # that crates.io / PyPI later refused. If either publish job fails or is
+      # skipped, this job is also skipped and the Release stays DRAFT — the
+      # maintainer investigates / re-runs the failed publish, after which a
+      # re-run of this job un-drafts.
+      - name: Publish the GitHub Release (un-draft)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: gh release edit "$TAG_NAME" --draft=false

@@ -86,10 +86,15 @@ Changelog and release notes are generated with
 [git-cliff](https://git-cliff.org) from Conventional Commit history
 (`cliff.toml`).
 
-- **GitHub Release notes are automated.** Pushing a `vMAJOR.MINOR.PATCH` tag
-  triggers `.github/workflows/changelog.yml`, which runs git-cliff and opens a
-  **draft** GitHub Release with the generated notes — review, then publish.
-  Pre-release tags (e.g. `v0.3.0-rc.1`) do not trigger it.
+- **The whole release is automated except the two registry publishes.** Pushing
+  a `vMAJOR.MINOR.PATCH` tag triggers `.github/workflows/release.yml`, which
+  runs git-cliff for the GitHub Release notes, builds the crate + wheels +
+  sdist, generates SLSA build provenance (`*.intoto.jsonl`) and a Sigstore
+  bundle (`*.sigstore.json`), attaches everything to the GitHub Release, and
+  un-drafts it — all without human intervention. The `crates.io` and `pypi`
+  publishes wait at GitHub Environments with **Required reviewers** (the
+  maintainer approves each in the Actions UI). Pre-release tags (e.g.
+  `v0.3.0-rc.1`) do not trigger it.
 - **`CHANGELOG.md` is curated by hand** — it is not auto-committed, because
   `main` is branch-protected. Keep adding entries under `[Unreleased]`; at
   release time promote that block to `## [X.Y.Z] - YYYY-MM-DD`. To draft the
