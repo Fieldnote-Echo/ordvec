@@ -104,6 +104,18 @@ def test_3d_rejected(index_cls):
         _make(index_cls).add(np.zeros((2, 3, 64), dtype=np.float32))
 
 
+@pytest.mark.parametrize("index_cls", INDEX_CLASSES)
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_wrong_width_rejected_before_coercion(index_cls, dtype):
+    # Width is a cheap metadata check validated on the ORIGINAL array *before* any
+    # dtype coercion: a wrong-width float64 is rejected with the same ValueError as
+    # float32, without first allocating its float32 twin (a wrong-shaped large
+    # array must not be copied just to be rejected).
+    bad = np.ones((4, 128), dtype=dtype)  # width 128 != dim 64
+    with pytest.raises(ValueError, match="dimension"):
+        _make(index_cls).add(bad)
+
+
 # -------------------------------------------------------------------
 # Rejected layout -> ValueError, checked BEFORE coercion so a float64 transpose
 # is never silently laundered into a contiguous float32 (hidden copy).

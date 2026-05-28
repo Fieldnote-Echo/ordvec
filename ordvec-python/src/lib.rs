@@ -258,6 +258,13 @@ fn require_c_contiguous(arr: &Bound<'_, PyAny>) -> PyResult<()> {
     }
 }
 
+/// Length of `arr`'s axis `axis` from its `shape` tuple, read as cheap metadata so
+/// width can be validated *before* any coercion copy — rejecting a wrong-shaped
+/// large float64 array must not first allocate its float32 twin.
+fn axis_len(arr: &Bound<'_, PyAny>, axis: usize) -> PyResult<usize> {
+    arr.getattr("shape")?.get_item(axis)?.extract::<usize>()
+}
+
 /// Present an embedding vector as a 1-D `float32` `PyReadonlyArray`, converting at
 /// the boundary. The premise of ordvec is *float vector in → rank/sign transform*,
 /// so float32 is the internal working dtype, not a contract the caller must
@@ -271,17 +278,29 @@ fn require_c_contiguous(arr: &Bound<'_, PyAny>) -> PyResult<()> {
 /// there too.
 ///
 /// Rejected (matching exception type): non-float dtype — bool / integer / complex /
-/// object / string — and wrong `ndim` (`TypeError`); a non-`C`-contiguous original
-/// (`ValueError`, checked before coercion). Bool and narrow integers are
+/// object / string — and wrong `ndim` (`TypeError`); a width that doesn't match the
+/// index dimension, or a non-`C`-contiguous original (`ValueError`) — both checked
+/// on the original *before* coercion, so a wrong-shaped large array is never copied
+/// just to be rejected. Bool and narrow integers are
 /// *deliberately* rejected: a `{0, 1}` or few-valued vector rank-transforms to an
 /// index-tie artefact, i.e. silent retrieval garbage. The all-finite check runs on
 /// the post-coercion f32 (an `f64 > f32::MAX` rounds to `+inf` — caught here, not
 /// silently indexed). Already-`float32` contiguous arrays are borrowed zero-copy.
-fn as_f32_1d<'py>(arr: &Bound<'py, PyAny>) -> PyResult<PyReadonlyArray1<'py, f32>> {
+fn as_f32_1d<'py>(
+    arr: &Bound<'py, PyAny>,
+    expected_len: Option<usize>,
+) -> PyResult<PyReadonlyArray1<'py, f32>> {
     let ro = if let Ok(a) = arr.cast::<PyArray1<f32>>() {
-        a.readonly()
+        let ro = a.readonly();
+        if let Some(dim) = expected_len {
+            check_width(ro.as_array().len(), dim)?;
+        }
+        ro
     } else {
         gate_float_ndim(arr, 1)?;
+        if let Some(dim) = expected_len {
+            check_width(axis_len(arr, 0)?, dim)?;
+        }
         require_c_contiguous(arr)?;
         arr.py()
             .import("numpy")?
@@ -301,11 +320,14 @@ fn as_f32_1d<'py>(arr: &Bound<'py, PyAny>) -> PyResult<PyReadonlyArray1<'py, f32
 
 /// 2-D `(n, dim)` counterpart of [`as_f32_1d`] for the `add` / batched-query paths.
 /// Same contract; see [`as_f32_1d`] for the full rationale.
-fn as_f32_2d<'py>(arr: &Bound<'py, PyAny>) -> PyResult<PyReadonlyArray2<'py, f32>> {
+fn as_f32_2d<'py>(arr: &Bound<'py, PyAny>, dim: usize) -> PyResult<PyReadonlyArray2<'py, f32>> {
     let ro = if let Ok(a) = arr.cast::<PyArray2<f32>>() {
-        a.readonly()
+        let ro = a.readonly();
+        check_width(ro.as_array().ncols(), dim)?;
+        ro
     } else {
         gate_float_ndim(arr, 2)?;
+        check_width(axis_len(arr, 1)?, dim)?;
         require_c_contiguous(arr)?;
         arr.py()
             .import("numpy")?
@@ -361,9 +383,8 @@ impl Rank {
     }
 
     fn add<'py>(&mut self, py: Python<'py>, vectors: &Bound<'py, PyAny>) -> PyResult<()> {
-        let vectors = as_f32_2d(vectors)?;
+        let vectors = as_f32_2d(vectors, self.inner.dim())?;
         let arr = vectors.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -391,9 +412,8 @@ impl Rank {
         queries: &Bound<'py, PyAny>,
         k: usize,
     ) -> PyResult<SearchArrays<'py>> {
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let nq = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -418,9 +438,8 @@ impl Rank {
         queries: &Bound<'py, PyAny>,
         k: usize,
     ) -> PyResult<SearchArrays<'py>> {
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let nq = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -544,9 +563,8 @@ impl RankQuant {
     }
 
     fn add<'py>(&mut self, py: Python<'py>, vectors: &Bound<'py, PyAny>) -> PyResult<()> {
-        let vectors = as_f32_2d(vectors)?;
+        let vectors = as_f32_2d(vectors, self.inner.dim())?;
         let arr = vectors.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -572,9 +590,8 @@ impl RankQuant {
         queries: &Bound<'py, PyAny>,
         k: usize,
     ) -> PyResult<SearchArrays<'py>> {
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let nq = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -598,9 +615,8 @@ impl RankQuant {
         queries: &Bound<'py, PyAny>,
         k: usize,
     ) -> PyResult<SearchArrays<'py>> {
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let nq = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -669,9 +685,8 @@ impl RankQuant {
         candidates: &Bound<'py, PyAny>,
         k: usize,
     ) -> PyResult<SubsetArrays<'py>> {
-        let query = as_f32_1d(query)?;
+        let query = as_f32_1d(query, Some(self.inner.dim()))?;
         let q = query.as_array();
-        check_width(q.len(), self.inner.dim())?;
         let q_slice = q.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -763,9 +778,8 @@ impl Bitmap {
     }
 
     fn add<'py>(&mut self, py: Python<'py>, vectors: &Bound<'py, PyAny>) -> PyResult<()> {
-        let vectors = as_f32_2d(vectors)?;
+        let vectors = as_f32_2d(vectors, self.inner.dim())?;
         let arr = vectors.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -793,9 +807,8 @@ impl Bitmap {
         queries: &Bound<'py, PyAny>,
         k: usize,
     ) -> PyResult<SearchArrays<'py>> {
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let nq = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -821,9 +834,8 @@ impl Bitmap {
         query: &Bound<'py, PyAny>,
         m: usize,
     ) -> PyResult<Bound<'py, PyArray1<u32>>> {
-        let query = as_f32_1d(query)?;
+        let query = as_f32_1d(query, Some(self.inner.dim()))?;
         let arr = query.as_array();
-        check_width(arr.len(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -841,9 +853,8 @@ impl Bitmap {
         py: Python<'py>,
         query: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray1<u64>>> {
-        let query = as_f32_1d(query)?;
+        let query = as_f32_1d(query, Some(self.inner.dim()))?;
         let arr = query.as_array();
-        check_width(arr.len(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -863,9 +874,8 @@ impl Bitmap {
         queries: &Bound<'py, PyAny>,
         m: usize,
     ) -> PyResult<Bound<'py, PyArray2<u32>>> {
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let batch = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -914,9 +924,8 @@ impl Bitmap {
                 "batch_size must be > 0",
             ));
         }
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let n_queries = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -1102,9 +1111,8 @@ impl SignBitmap {
     }
 
     fn add<'py>(&mut self, py: Python<'py>, vectors: &Bound<'py, PyAny>) -> PyResult<()> {
-        let vectors = as_f32_2d(vectors)?;
+        let vectors = as_f32_2d(vectors, self.inner.dim())?;
         let arr = vectors.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -1133,9 +1141,8 @@ impl SignBitmap {
         query: &Bound<'py, PyAny>,
         m: usize,
     ) -> PyResult<Bound<'py, PyArray1<u32>>> {
-        let query = as_f32_1d(query)?;
+        let query = as_f32_1d(query, Some(self.inner.dim()))?;
         let arr = query.as_array();
-        check_width(arr.len(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -1157,9 +1164,8 @@ impl SignBitmap {
         queries: &Bound<'py, PyAny>,
         m: usize,
     ) -> PyResult<Bound<'py, PyArray2<u32>>> {
-        let queries = as_f32_2d(queries)?;
+        let queries = as_f32_2d(queries, self.inner.dim())?;
         let arr = queries.as_array();
-        check_width(arr.ncols(), self.inner.dim())?;
         let batch = arr.nrows();
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
@@ -1200,9 +1206,8 @@ impl SignBitmap {
         py: Python<'py>,
         query: &Bound<'py, PyAny>,
     ) -> PyResult<Bound<'py, PyArray1<u64>>> {
-        let query = as_f32_1d(query)?;
+        let query = as_f32_1d(query, Some(self.inner.dim()))?;
         let arr = query.as_array();
-        check_width(arr.len(), self.inner.dim())?;
         let slice = arr.as_slice().ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err(
                 "array must be C-contiguous; call np.ascontiguousarray() first",
@@ -1278,7 +1283,7 @@ fn rank_transform<'py>(
     py: Python<'py>,
     v: &Bound<'py, PyAny>,
 ) -> PyResult<Bound<'py, PyArray1<u16>>> {
-    let v = as_f32_1d(v)?;
+    let v = as_f32_1d(v, None)?;
     let arr = v.as_array();
     let slice = arr.as_slice().ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(
@@ -1474,9 +1479,8 @@ fn search_asymmetric_byte_lut<'py>(
             "search_asymmetric_byte_lut is a benchmark-only helper and does not support bits=1; use RankQuant.search_asymmetric instead",
         ));
     }
-    let queries = as_f32_2d(queries)?;
+    let queries = as_f32_2d(queries, index.inner.dim())?;
     let arr = queries.as_array();
-    check_width(arr.ncols(), index.inner.dim())?;
     let nq = arr.nrows();
     let slice = arr.as_slice().ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(
