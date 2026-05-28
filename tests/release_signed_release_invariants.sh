@@ -119,9 +119,15 @@ for pub in publish-crate publish-pypi; do
 done
 
 # ----------------------------------------------------------------------
-# (9) publish-crate enforces byte-identity vs the attested .crate. The
-#     uploaded crate must match the SLSA-attested artifact, otherwise the
-#     published version isn't the one the provenance covers.
+# (9) publish-crate proves byte-identity vs the attested .crate on BOTH
+#     sides of `cargo publish`:
+#       (9a) pre-publish: download the attested .crate, re-run `cargo package`,
+#            sha256-compare. Fail-closed BEFORE the OIDC token is minted.
+#       (9b) post-publish: download the just-published .crate from crates.io
+#            and sha256-compare to the attested artifact. cargo publish runs
+#            its own internal packaging step that the pre-publish gate
+#            cannot inspect — this is the empirical proof that the bytes
+#            actually served by crates.io match the SLSA-attested artifact.
 # ----------------------------------------------------------------------
 pcb="$(job_body publish-crate)"
 printf '%s\n' "$pcb" | grep -qE 'uses:[[:space:]]*actions/download-artifact' \
@@ -129,9 +135,11 @@ printf '%s\n' "$pcb" | grep -qE 'uses:[[:space:]]*actions/download-artifact' \
 printf '%s\n' "$pcb" | grep -qE 'name:[[:space:]]*dist-crate' \
   || fail "publish-crate must download the artifact named \`dist-crate\` (the attested .crate)"
 printf '%s\n' "$pcb" | grep -qE 'cargo[[:space:]]+package[[:space:]]+-p[[:space:]]+ordvec[[:space:]]+--locked' \
-  || fail "publish-crate must re-run \`cargo package -p ordvec --locked\` so it can sha256-compare to the attested .crate"
+  || fail "publish-crate must re-run \`cargo package -p ordvec --locked\` so it can sha256-compare to the attested .crate (pre-publish gate)"
 printf '%s\n' "$pcb" | grep -qE 'sha256sum' \
   || fail "publish-crate must sha256sum-compare the repackaged .crate vs the attested .crate before publishing"
+printf '%s\n' "$pcb" | grep -qE 'crates\.io/api/v1/crates/ordvec|static\.crates\.io/crates/ordvec' \
+  || fail "publish-crate must download the just-published .crate from crates.io after \`cargo publish\` (post-publish byte-identity proof; pre-publish alone cannot inspect cargo publish's internal packaging)"
 
 # ----------------------------------------------------------------------
 # (10) publish-github-release un-drafts ONLY AFTER both registry publishes succeed.

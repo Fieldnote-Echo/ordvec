@@ -33,11 +33,20 @@ The unified `release.yml`:
   `*.intoto.jsonl` provenance** on the GitHub Release while it is still **a
   DRAFT** (`release-assets-draft` is the sole Release-asset writer — no manual
   attach, which is what v0.2.0's manual step missed);
-- enforces **byte-identity** in `publish-crate`: it downloads the SLSA-attested
-  `.crate` artifact, re-packages with `--locked`, and `sha256`-compares before
-  minting the crates.io OIDC token. If they differ (toolchain drift,
-  non-deterministic packaging), the publish fails closed **before** the token
-  is minted — nothing reaches crates.io;
+- proves **byte-identity** in `publish-crate` on both sides of `cargo publish`:
+    1. **pre-publish gate** — downloads the SLSA-attested `.crate` artifact,
+       re-packages with `--locked`, and `sha256`-compares before minting the
+       crates.io OIDC token. Defends against toolchain drift / deterministic-
+       packaging regression; if they differ, fails closed **before** the
+       token is minted (nothing reaches crates.io);
+    2. **post-publish empirical proof** — downloads the just-published `.crate`
+       from `crates.io/api/v1/crates/ordvec/<v>/download` and `sha256`-compares
+       to the attested artifact. `cargo publish` runs its own internal
+       packaging step the pre-publish gate cannot inspect; this is the only
+       check that proves the bytes crates.io actually serves equal the SLSA-
+       attested bytes. A mismatch fails closed, so `publish-github-release`
+       never un-drafts the Release (the version is then yank-only on
+       crates.io, but the failure is loudly observable);
 - **un-drafts the GitHub Release ONLY after BOTH `publish-crate` AND
   `publish-pypi` succeed** (`publish-github-release` is the sole un-draft
   point). If either publish fails or is skipped, the Release stays DRAFT — no
