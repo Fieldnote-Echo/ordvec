@@ -239,14 +239,19 @@ applications must validate paths before calling").
 
 ### 5.1 Existing controls (verified)
 
-**Workflow code (all 13 workflows):** third-party actions pinned by commit
-SHA; `persist-credentials: false` on every checkout; `permissions: contents:
-read` default. **Release workflows** (`release-crate.yml`, `release-python.yml`)
-are `workflow_dispatch`-only (no tag/push trigger), run a `require-ci-green`
-gate against `main`, publish via **OIDC trusted publishing** (no long-lived
-registry tokens), and emit **SLSA build provenance**
-(`actions/attest-build-provenance`) **before** publish — a failed attestation
-fails the release closed. `release-python` additionally gets **PEP 740**
+**Workflow code (all workflows):** third-party actions pinned by commit SHA
+(the one mandated exception is the SLSA reusable workflow, which the SLSA
+trust model requires be pinned by version *tag*); `persist-credentials: false`
+on every checkout; `permissions: contents: read` default. The **release
+workflow** (`release.yml`) is tag-triggered with a strict-SemVer guard; build,
+GitHub attestation, SLSA provenance, Release-asset attach, and un-draft all
+run automatically, while the **`crates.io`** and **`pypi`** publishes are
+gated behind GitHub Environments with **Required reviewers** (the only manual
+step). It runs a `require-ci-green` gate against `main`, publishes via **OIDC
+trusted publishing** (no long-lived registry tokens), and emits **SLSA build
+provenance** (`actions/attest-build-provenance` + a `slsa-github-generator`
+`*.intoto.jsonl` attached to the GitHub Release) **before** publish — a failed
+attestation fails the release closed. PyPI additionally gets **PEP 740**
 attestations via Trusted Publishing.
 
 **Static / supply-chain analysis:** **CodeQL** scans Rust, Python, and Actions
@@ -279,7 +284,7 @@ a version on delete (no different artifact may be re-uploaded under the same
 version). So post-publish "silent replacement" of a version is not possible on
 either registry, and consumers can verify artifacts against the SLSA / PEP 740
 provenance above. The GitHub-side mutability surface is now closed too:
-`changelog.yml` cuts tagged GitHub Releases, and **GitHub immutable releases is
+`release.yml` cuts tagged GitHub Releases, and **GitHub immutable releases is
 enabled**, so a published release's `v*` tag cannot be force-moved or deleted
 and its assets cannot be replaced after publication; the **`main` branch is
 protected** (pull-request review required, force-pushes and deletions blocked)

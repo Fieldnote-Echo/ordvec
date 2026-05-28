@@ -45,9 +45,13 @@ on:
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
 
-# Serialize releases; never cancel an in-flight publish.
+# Globally serialize releases (one release pipeline at a time across all tags)
+# and NEVER cancel an in-flight publish. The group is a constant, not
+# `release-${{ github.ref }}`, because per-tag scoping would allow two tag
+# pipelines to run concurrently — which would race the Release-asset writes
+# and double-book the gated registry pushes.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 permissions:
@@ -227,7 +231,10 @@ jobs:
           target: ${{ matrix.platform.target }}
           manylinux: ${{ matrix.platform.manylinux }}
           args: --release --out dist
-          sccache: 'true'
+          # sccache deliberately OFF for release builds. A poisoned sccache entry
+          # could inject code into the shipped wheel (zizmor cache-poisoning,
+          # HIGH); the speedup isn't worth that risk on the release path. The CI
+          # path (`python.yml`) keeps sccache on for the PR/main cadence.
       # Prove the freshly-built wheel runs before it can be published. The
       # linux/aarch64 wheel is cross-built under QEMU and can't execute on the x86
       # host, so it's skipped (covered by python.yml's native arm leg + the
@@ -369,7 +376,9 @@ jobs:
         run: |
           set -euo pipefail
           # SLSA generator wants `sha256sum`-format subjects, base64'd, no wrap.
-          echo "hashes=$(sha256sum *.crate *.whl *.tar.gz | base64 -w0)" >> "$GITHUB_OUTPUT"
+          # `./*.glob` form (not bare `*.glob`) so a hostile filename that starts
+          # with `-` can't be reinterpreted as a sha256sum flag (shellcheck SC2035).
+          echo "hashes=$(sha256sum ./*.crate ./*.whl ./*.tar.gz | base64 -w0)" >> "$GITHUB_OUTPUT"
 
   provenance:
     name: SLSA Build-L3 provenance (.intoto.jsonl)

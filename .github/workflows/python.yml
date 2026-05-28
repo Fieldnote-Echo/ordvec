@@ -6,7 +6,7 @@ name: python
 # the core checks, and so a green run proves the bindings build cold from a
 # checkout (the paper's reproducibility requirement).
 on:
-  # Push runs on EVERY commit to main (no paths filter): release-python.yml's
+  # Push runs on EVERY commit to main (no paths filter): release.yml's
   # require-ci-green gate asserts a successful python.yml run exists for the exact
   # release SHA on main, so a docs-only or workflow-only release tip must still
   # produce a run here or the wheel gate would be unsatisfiable. Feature branches
@@ -56,19 +56,18 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # release-python.yml builds one wheel per platform; this matrix makes
+        # release.yml builds one wheel per platform; this matrix makes
         # sure every one of those targets is *behaviourally* tested (build →
         # install → pytest), not merely compiled. abi3 means a single wheel
         # covers all CPython 3.10+, so the python axis only needs its 3.10↔3.13
         # floor/ceiling checked once (linux/x86_64); the other targets exercise
         # the native code on 3.13. The aarch64 runners (ubuntu-24.04-arm,
         # macos-latest) are what exercise the NEON kernels through the bindings.
-        # NB: ubuntu-24.04-arm hosted runners are free on public repos / paid
-        # plans; until this repo is public the ARM leg may queue or bill.
-        # macOS-Intel (macos-13) is intentionally NOT tested here: that runner
-        # image is deprecated + scarce, so the jobs sit queued and block PRs. The
-        # Intel wheel is still built + shipped by release-python.yml, and its
-        # x86_64 code is covered by the linux-x86_64 legs (logic) + macos-arm64
+        # macOS-Intel (macos-13) is intentionally NOT tested here AND not shipped
+        # by release.yml: the runner image is deprecated + scarce, so the jobs
+        # sit queued and block PRs. Intel-mac users install from the sdist;
+        # adding a cross-compiled Intel wheel is tracked in issue #29. The x86_64
+        # code is still covered by the linux-x86_64 legs (logic) + macos-arm64
         # (Mach-O), so the lost test coverage is marginal.
         include:
           - { os: ubuntu-latest, python: "3.10" } # linux x86_64 — abi3 floor

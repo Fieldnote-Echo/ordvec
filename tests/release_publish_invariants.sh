@@ -2,15 +2,16 @@
 #
 # Release-publish SBOM invariants — pinned in CI.
 #
-# release-crate.yml / release-python.yml are workflow_dispatch-only, so their
-# "generate a CycloneDX SBOM, then publish" flow never runs in push/PR CI. A
-# generated *.cdx.json SBOM once broke BOTH publish paths and would only have
-# surfaced at a manual release:
+# release.yml is the unified tag-triggered release pipeline; its publishes are
+# gated behind GitHub Environments (Required reviewers), so the "generate a
+# CycloneDX SBOM, then publish" flow runs only on a real release. A generated
+# *.cdx.json SBOM once broke BOTH publish paths and would only have surfaced
+# at the next release:
 #   * crate — the untracked SBOM dirtied the git tree, so `cargo publish` refused
 #     it (and would otherwise bundle it into the published .crate);
 #   * PyPI  — the SBOM artifact was downloaded into dist/, which twine rejects.
 # This pins the fixes so a regression fails here, on every push/PR, instead of
-# silently passing CI and only breaking at manual release time.
+# silently passing CI and only breaking at release time.
 set -euo pipefail
 fail() { echo "::error::release-publish invariant violated: $*"; exit 1; }
 
@@ -25,28 +26,30 @@ done
 
 # (2) In the PyPI publish job the step order must be:
 #       actions/download-artifact  (pulls the SBOM into dist/)
-#         -> delete *.cdx.json from dist/
+#         -> delete *.cdx.json from dist/  (either explicit cdx.json delete OR
+#            a keep-only-wheels/tar.gz find that excludes everything else)
 #           -> pypa/gh-action-pypi-publish upload.
 #     twine rejects a stray .cdx.json in dist/, so the cleanup must run AFTER the
 #     download (otherwise it is a no-op for the downloaded SBOM) and BEFORE the
-#     upload. The search is scoped to the `publish` job body, so a download step
-#     in another job cannot satisfy the ordering; the delete is matched only in an
-#     executing `run:` context (single-line or a `run: |` block), so a step name or
-#     other non-executing text cannot satisfy it; comment lines are skipped; and the
-#     publish step keys on the pinned action name (not the bare string `pypi-publish`).
-wf=".github/workflows/release-python.yml"
+#     upload. The search is scoped to the `publish-pypi` job body, so a download
+#     step in another job cannot satisfy the ordering; the delete is matched only
+#     in an executing `run:` context (single-line or a `run: |` block), so a step
+#     name or other non-executing text cannot satisfy it; comment lines are
+#     skipped; and the publish step keys on the pinned action name (not the bare
+#     string `pypi-publish`).
+wf=".github/workflows/release.yml"
 [ -f "$wf" ] || fail "$wf: workflow file not found"
 
-# Extract the `publish` job body: from its `  publish:` key to the next
-# 2-space-indented job key, or EOF. Scoping here is what makes the ordering
-# meaningful — the three steps must live in the SAME (publish) job.
-pub_start="$(grep -nE '^  publish:[[:space:]]*$' "$wf" | head -1 | cut -d: -f1)"
-[ -n "$pub_start" ] || fail "$wf: no 'publish:' job found"
+# Extract the `publish-pypi` job body: from its `  publish-pypi:` key to the
+# next 2-space-indented job key, or EOF. Scoping here is what makes the
+# ordering meaningful — the three steps must live in the SAME job.
+pub_start="$(grep -nE '^  publish-pypi:[[:space:]]*$' "$wf" | head -1 | cut -d: -f1)"
+[ -n "$pub_start" ] || fail "$wf: no 'publish-pypi:' job found"
 pub_end="$(awk -v s="$pub_start" 'NR>s && /^  [A-Za-z0-9_-]+:/ {print NR-1; exit}' "$wf")"
 [ -n "$pub_end" ] || pub_end="$(awk 'END{print NR}' "$wf")"
 job="$(sed -n "${pub_start},${pub_end}p" "$wf")"
 
-# First real (non-comment) line WITHIN the publish job matching the regex.
+# First real (non-comment) line WITHIN the publish-pypi job matching the regex.
 in_job() { printf '%s\n' "$job" | grep -nE "$1" | grep -vE '^[0-9]+:[[:space:]]*#' | head -1 | cut -d: -f1; }
 
 dl_line="$(in_job 'uses:[[:space:]]*actions/download-artifact' || true)"
@@ -54,11 +57,17 @@ dl_line="$(in_job 'uses:[[:space:]]*actions/download-artifact' || true)"
 # single-line `run: ... -delete` or a line inside that step's `run: |`/`run: >`
 # block. Matching the command text anywhere would also accept NON-executing text
 # (a step `name:`, an `env:`/`with:` value, prose), so the delete only counts on
-# a `run:` line or within a run block scalar. Still requires a real delete
-# (`find ... -delete` or `rm ... *.cdx.json`), not a bare mention.
+# a `run:` line or within a run block scalar. Accepts both forms:
+#   (a) explicit cdx.json delete:                  `find ... cdx.json ... -delete` / `rm ... *.cdx.json`
+#   (b) keep-only-wheels/tar.gz delete-everything: `find dist -type f ! -name '*.whl' ! -name '*.tar.gz' -delete`
+# Either form removes the SBOM before the upload.
 clean_line="$(printf '%s\n' "$job" | awk '
   function indent(s,  i){ i = match(s, /[^ ]/); return (i ? i - 1 : length(s)) }
-  BEGIN { del = "find.*cdx\\.json.*-delete|rm[[:space:]].*cdx\\.json" }
+  BEGIN {
+    del_a = "find.*cdx\\.json.*-delete|rm[[:space:]].*cdx\\.json"
+    del_b = "find.*-type[[:space:]]+f.*!.*-name.*whl.*!.*-name.*tar\\.gz.*-delete"
+    del = del_a "|" del_b
+  }
   { is_comment = ($0 ~ /^[[:space:]]*#/) }
   in_block {
     if ($0 ~ /^[[:space:]]*$/) next                  # blank line stays in block
@@ -73,13 +82,13 @@ clean_line="$(printf '%s\n' "$job" | awk '
 ' || true)"
 pub_line="$(in_job 'uses:[[:space:]]*pypa/gh-action-pypi-publish' || true)"
 
-[ -n "$dl_line" ]    || fail "$wf (publish job): no actions/download-artifact step found"
-[ -n "$clean_line" ] || fail "$wf (publish job): no step deleting *.cdx.json from dist/ (need 'find ... -delete' or 'rm ... *.cdx.json')"
-[ -n "$pub_line" ]   || fail "$wf (publish job): no pypa/gh-action-pypi-publish step found"
+[ -n "$dl_line" ]    || fail "$wf (publish-pypi job): no actions/download-artifact step found"
+[ -n "$clean_line" ] || fail "$wf (publish-pypi job): no step deleting *.cdx.json from dist/ (need 'find ... cdx.json ... -delete', 'rm ... *.cdx.json', or 'find ... ! -name *.whl ! -name *.tar.gz -delete')"
+[ -n "$pub_line" ]   || fail "$wf (publish-pypi job): no pypa/gh-action-pypi-publish step found"
 
 [ "$dl_line" -lt "$clean_line" ] \
-  || fail "$wf (publish job): the *.cdx.json cleanup must run AFTER actions/download-artifact, else it is a no-op for the downloaded SBOM"
+  || fail "$wf (publish-pypi job): the *.cdx.json cleanup must run AFTER actions/download-artifact, else it is a no-op for the downloaded SBOM"
 [ "$clean_line" -lt "$pub_line" ] \
-  || fail "$wf (publish job): the *.cdx.json cleanup must run BEFORE the pypa publish"
+  || fail "$wf (publish-pypi job): the *.cdx.json cleanup must run BEFORE the pypa publish"
 
 echo "OK: release-publish SBOM invariants hold."
