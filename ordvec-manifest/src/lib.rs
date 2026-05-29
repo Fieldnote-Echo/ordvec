@@ -88,6 +88,16 @@ pub fn verify_manifest_with_base(
     verify_manifest(&document, options)
 }
 
+pub fn verify_index_manifest(
+    index_path: impl Into<PathBuf>,
+    manifest_path: impl AsRef<Path>,
+    mut options: VerifyOptions,
+) -> Result<VerificationReport, ManifestError> {
+    let document = load_manifest_file(manifest_path)?;
+    options.index_override = Some(index_path.into());
+    Ok(verify_manifest(&document, options))
+}
+
 pub fn verify_manifest(document: &ManifestDocument, options: VerifyOptions) -> VerificationReport {
     let mut report = VerificationReport::new(Some(document.manifest.manifest_id.clone()));
     validate_manifest_shape(&document.manifest, &mut report);
@@ -189,7 +199,7 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
     if !is_sha256_hex(&manifest.artifact.sha256) {
         report.error(
             "artifact_sha256_invalid",
-            "artifact.sha256 must be a 64-character hex SHA-256 digest",
+            "artifact.sha256 must be a lowercase 64-character hex SHA-256 digest",
         );
     }
     if manifest.artifact.bytes_per_vec == 0 {
@@ -240,7 +250,7 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
         if !is_sha256_hex(sha256) {
             report.error(
                 "row_identity_sha256_invalid",
-                "row_identity.sha256 must be a 64-character hex SHA-256 digest",
+                "row_identity.sha256 must be a lowercase 64-character hex SHA-256 digest",
             );
         }
         if id_kind != "uuid" {
@@ -250,6 +260,31 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
             );
         }
     }
+
+    validate_optional_non_empty(
+        "embedding_model_revision_empty",
+        "embedding.model_revision must be non-empty when present",
+        manifest.embedding.model_revision.as_deref(),
+        report,
+    );
+    validate_optional_sha256(
+        "embedding_corpus_digest_invalid",
+        "embedding.corpus_digest must be a lowercase 64-character hex SHA-256 digest",
+        manifest.embedding.corpus_digest.as_deref(),
+        report,
+    );
+    validate_optional_sha256(
+        "embedding_matrix_digest_invalid",
+        "embedding.embedding_matrix_digest must be a lowercase 64-character hex SHA-256 digest",
+        manifest.embedding.embedding_matrix_digest.as_deref(),
+        report,
+    );
+    validate_optional_non_empty(
+        "embedding_normalization_empty",
+        "embedding.normalization must be non-empty when present",
+        manifest.embedding.normalization.as_deref(),
+        report,
+    );
 
     if let Some(build) = &manifest.build {
         if build.invocation_id.trim().is_empty() {
@@ -268,6 +303,30 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
                 "build.builder_id must be non-empty",
             );
         }
+        validate_optional_non_empty(
+            "build_source_repo_empty",
+            "build.source_repo must be non-empty when present",
+            build.source_repo.as_deref(),
+            report,
+        );
+        validate_optional_non_empty(
+            "build_source_commit_empty",
+            "build.source_commit must be non-empty when present",
+            build.source_commit.as_deref(),
+            report,
+        );
+        validate_optional_non_empty(
+            "build_ci_provider_empty",
+            "build.ci_provider must be non-empty when present",
+            build.ci_provider.as_deref(),
+            report,
+        );
+        validate_optional_non_empty(
+            "build_ci_run_id_empty",
+            "build.ci_run_id must be non-empty when present",
+            build.ci_run_id.as_deref(),
+            report,
+        );
     }
 
     for key in manifest.extensions.keys() {
@@ -277,6 +336,28 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
                 format!("extension key {key:?} must be namespaced"),
             );
         }
+    }
+}
+
+fn validate_optional_non_empty(
+    code: &str,
+    message: &str,
+    value: Option<&str>,
+    report: &mut VerificationReport,
+) {
+    if value.is_some_and(|value| value.trim().is_empty()) {
+        report.error(code, message);
+    }
+}
+
+fn validate_optional_sha256(
+    code: &str,
+    message: &str,
+    value: Option<&str>,
+    report: &mut VerificationReport,
+) {
+    if value.is_some_and(|value| !is_sha256_hex(value)) {
+        report.error(code, message);
     }
 }
 
@@ -645,6 +726,14 @@ pub struct Artifact {
 pub struct Embedding {
     pub model: String,
     pub dim: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_revision: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub corpus_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub embedding_matrix_digest: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub normalization: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -653,6 +742,14 @@ pub struct BuildInfo {
     pub invocation_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub builder_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_repo: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_provider: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ci_run_id: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -861,11 +958,33 @@ pub enum CreateRowIdentity {
     Jsonl(PathBuf),
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct CreateManifestOptions {
+    pub allow_absolute_paths: bool,
+    pub allow_path_escape: bool,
+}
+
 pub fn create_manifest_for_index(
     index_path: impl AsRef<Path>,
     row_identity: CreateRowIdentity,
     embedding_model: impl Into<String>,
     out_path: impl AsRef<Path>,
+) -> Result<IndexManifest, ManifestError> {
+    create_manifest_for_index_with_options(
+        index_path,
+        row_identity,
+        embedding_model,
+        out_path,
+        CreateManifestOptions::default(),
+    )
+}
+
+pub fn create_manifest_for_index_with_options(
+    index_path: impl AsRef<Path>,
+    row_identity: CreateRowIdentity,
+    embedding_model: impl Into<String>,
+    out_path: impl AsRef<Path>,
+    options: CreateManifestOptions,
 ) -> Result<IndexManifest, ManifestError> {
     let index_path = index_path.as_ref();
     let out_path = out_path.as_ref();
@@ -879,7 +998,7 @@ pub fn create_manifest_for_index(
     let metadata = probe_index_metadata(index_path)?;
     let index_hash = sha256_file(index_path)?;
     let artifact = Artifact {
-        path: manifest_relative_path(index_path, out_base),
+        path: manifest_path_for_create(index_path, out_base, &options, "artifact")?,
         sha256: index_hash.sha256,
         kind: ManifestIndexKind::from_core(metadata.kind),
         format_version: metadata.format_version,
@@ -915,7 +1034,7 @@ pub fn create_manifest_for_index(
                 )));
             }
             RowIdentity::Jsonl {
-                path: manifest_relative_path(&path, out_base),
+                path: manifest_path_for_create(&path, out_base, &options, "row identity")?,
                 sha256: row_hash.sha256,
                 row_count: stats.row_count,
                 id_kind: "uuid".to_string(),
@@ -933,11 +1052,19 @@ pub fn create_manifest_for_index(
         embedding: Embedding {
             model: embedding_model.into(),
             dim: metadata.dim,
+            model_revision: None,
+            corpus_digest: None,
+            embedding_matrix_digest: None,
+            normalization: None,
         },
         row_identity,
         build: Some(BuildInfo {
             invocation_id,
             builder_id: Some("ordvec-manifest".to_string()),
+            source_repo: None,
+            source_commit: None,
+            ci_provider: None,
+            ci_run_id: None,
         }),
         attestations: Vec::new(),
         extensions: BTreeMap::new(),
@@ -1031,17 +1158,74 @@ fn validate_row_id_string(
     }
 }
 
-fn manifest_relative_path(path: &Path, base_dir: &Path) -> String {
-    let canonical_path = fs::canonicalize(path);
-    let canonical_base = fs::canonicalize(base_dir);
-    if let (Ok(canonical_path), Ok(canonical_base)) = (canonical_path, canonical_base) {
-        if let Ok(relative) = canonical_path.strip_prefix(&canonical_base) {
-            if !relative.as_os_str().is_empty() {
-                return path_to_manifest_string(relative);
-            }
+fn manifest_path_for_create(
+    path: &Path,
+    base_dir: &Path,
+    options: &CreateManifestOptions,
+    context: &str,
+) -> Result<String, ManifestError> {
+    let canonical_path = fs::canonicalize(path)?;
+    let canonical_base = fs::canonicalize(base_dir)?;
+    if let Ok(relative) = canonical_path.strip_prefix(&canonical_base) {
+        if !relative.as_os_str().is_empty() {
+            return Ok(path_to_manifest_string(relative));
+        }
+        return Ok(".".to_string());
+    }
+
+    if !options.allow_path_escape {
+        return Err(ManifestError::invalid(format!(
+            "{context} path {} is outside manifest directory {}; use --allow-path-escape to create a manifest that requires non-default verification policy",
+            canonical_path.display(),
+            canonical_base.display()
+        )));
+    }
+
+    if let Some(relative) = relative_path_between(&canonical_base, &canonical_path) {
+        return Ok(path_to_manifest_string(&relative));
+    }
+
+    if options.allow_absolute_paths {
+        return Ok(path_to_manifest_string(&canonical_path));
+    }
+
+    Err(ManifestError::invalid(format!(
+        "{context} path {} cannot be expressed relative to manifest directory {}; use --allow-absolute-paths with --allow-path-escape",
+        canonical_path.display(),
+        canonical_base.display()
+    )))
+}
+
+fn relative_path_between(base: &Path, target: &Path) -> Option<PathBuf> {
+    let base_components = base.components().collect::<Vec<_>>();
+    let target_components = target.components().collect::<Vec<_>>();
+    let mut common = 0usize;
+    while common < base_components.len()
+        && common < target_components.len()
+        && base_components[common] == target_components[common]
+    {
+        common += 1;
+    }
+
+    if common == 0 {
+        return None;
+    }
+
+    let mut relative = PathBuf::new();
+    for component in &base_components[common..] {
+        if matches!(component, Component::Normal(_)) {
+            relative.push("..");
         }
     }
-    path_to_manifest_string(path)
+    for component in &target_components[common..] {
+        match component {
+            Component::Normal(part) => relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => relative.push(".."),
+            Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+    Some(relative)
 }
 
 fn path_to_manifest_string(path: &Path) -> String {
@@ -1098,11 +1282,14 @@ fn valid_extension_part(part: &str) -> bool {
 }
 
 fn is_sha256_hex(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|b| b.is_ascii_hexdigit())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|b| b.is_ascii_digit() || matches!(b, b'a'..=b'f'))
 }
 
 fn hex_digest_eq(a: &str, b: &str) -> bool {
-    a.eq_ignore_ascii_case(b)
+    a == b
 }
 
 #[cfg(feature = "sqlite")]

@@ -1,7 +1,8 @@
-use ordvec::RankQuant;
+use ordvec::{Bitmap, Rank, RankQuant, SignBitmap};
 use ordvec_manifest::{
-    create_manifest_for_index, load_manifest_file, sha256_file, verify_manifest_with_base,
-    CreateRowIdentity, RowIdentity, VerifyOptions,
+    create_manifest_for_index, create_manifest_for_index_with_options, load_manifest_file,
+    sha256_file, verify_index_manifest, verify_manifest_with_base, CreateManifestOptions,
+    CreateRowIdentity, ManifestIndexParams, RowIdentity, VerifyOptions,
 };
 use serde_json::json;
 use std::fs;
@@ -16,6 +17,47 @@ fn write_index(dir: &Path) -> PathBuf {
     index.add(&docs);
     index.write(&path).unwrap();
     path
+}
+
+#[derive(Clone, Copy)]
+enum FixtureKind {
+    Rank,
+    RankQuant,
+    Bitmap,
+    SignBitmap,
+}
+
+fn write_index_kind(dir: &Path, kind: FixtureKind) -> PathBuf {
+    match kind {
+        FixtureKind::Rank => {
+            let path = dir.join("index.tvr");
+            let mut index = Rank::new(8);
+            index.add(&[
+                1.0, 3.0, 2.0, 4.0, 8.0, 7.0, 6.0, 5.0, 8.0, 6.0, 7.0, 5.0, 1.0, 2.0, 3.0, 4.0,
+            ]);
+            index.write(&path).unwrap();
+            path
+        }
+        FixtureKind::RankQuant => write_index(dir),
+        FixtureKind::Bitmap => {
+            let path = dir.join("index.tvbm");
+            let mut index = Bitmap::new(64, 16);
+            let docs: Vec<f32> = (0..128).map(|i| ((i * 17) % 31) as f32).collect();
+            index.add(&docs);
+            index.write(&path).unwrap();
+            path
+        }
+        FixtureKind::SignBitmap => {
+            let path = dir.join("index.tvsb");
+            let mut index = SignBitmap::new(64);
+            let docs: Vec<f32> = (0usize..128)
+                .map(|i| if i.is_multiple_of(3) { 1.0 } else { -1.0 })
+                .collect();
+            index.add(&docs);
+            index.write(&path).unwrap();
+            path
+        }
+    }
 }
 
 fn write_row_map(path: &Path, rows: &[(&str, Option<&str>)]) {
@@ -45,25 +87,39 @@ fn identity_manifest(dir: &Path) -> (tempfile::TempDir, ordvec_manifest::IndexMa
 }
 
 #[test]
-fn create_then_verify_identity_manifest() {
+fn create_then_verify_identity_manifest_for_all_persisted_formats() {
     let temp = tempfile::tempdir().unwrap();
-    let index = write_index(temp.path());
-    let manifest_path = temp.path().join("manifest.json");
-    let manifest = create_manifest_for_index(
-        &index,
-        CreateRowIdentity::RowIdIdentity,
-        "test-embedding",
-        &manifest_path,
-    )
-    .unwrap();
+    for (kind, expected) in [
+        (FixtureKind::Rank, ordvec_manifest::ManifestIndexKind::Rank),
+        (
+            FixtureKind::RankQuant,
+            ordvec_manifest::ManifestIndexKind::RankQuant,
+        ),
+        (
+            FixtureKind::Bitmap,
+            ordvec_manifest::ManifestIndexKind::Bitmap,
+        ),
+        (
+            FixtureKind::SignBitmap,
+            ordvec_manifest::ManifestIndexKind::SignBitmap,
+        ),
+    ] {
+        let case = tempfile::tempdir_in(temp.path()).unwrap();
+        let index = write_index_kind(case.path(), kind);
+        let manifest_path = case.path().join("manifest.json");
+        let manifest = create_manifest_for_index(
+            &index,
+            CreateRowIdentity::RowIdIdentity,
+            "test-embedding",
+            &manifest_path,
+        )
+        .unwrap();
 
-    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
-    assert!(report.ok, "{:?}", report.errors);
-    assert_eq!(report.skipped_checks, ["attestations_absent"]);
-    assert_eq!(
-        report.artifact.metadata.unwrap().kind,
-        ordvec_manifest::ManifestIndexKind::RankQuant
-    );
+        let report = verify_manifest_with_base(manifest, case.path(), VerifyOptions::default());
+        assert!(report.ok, "{:?}", report.errors);
+        assert_eq!(report.skipped_checks, ["attestations_absent"]);
+        assert_eq!(report.artifact.metadata.unwrap().kind, expected);
+    }
 }
 
 #[test]
@@ -72,11 +128,15 @@ fn create_manifest_creates_output_parent_for_programmatic_callers() {
     let index = write_index(temp.path());
     let manifest_path = temp.path().join("nested").join("manifest.json");
 
-    let manifest = create_manifest_for_index(
+    let manifest = create_manifest_for_index_with_options(
         &index,
         CreateRowIdentity::RowIdIdentity,
         "test-embedding",
         &manifest_path,
+        CreateManifestOptions {
+            allow_path_escape: true,
+            ..CreateManifestOptions::default()
+        },
     )
     .unwrap();
 
@@ -119,6 +179,42 @@ fn schema_rejects_unknown_fields_and_bad_extension_keys() {
 }
 
 #[test]
+fn schema_enforces_lowercase_sha256_and_optional_field_shapes() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    manifest.artifact.sha256 = manifest.artifact.sha256.to_ascii_uppercase();
+    manifest.row_identity = RowIdentity::Jsonl {
+        path: "rows.jsonl".to_string(),
+        sha256: "A".repeat(64),
+        row_count: 2,
+        id_kind: "uuid".to_string(),
+        db: None,
+    };
+    manifest.embedding.model_revision = Some("".to_string());
+    manifest.embedding.corpus_digest = Some("A".repeat(64));
+    manifest.embedding.embedding_matrix_digest = Some("not-a-digest".to_string());
+    manifest.embedding.normalization = Some("".to_string());
+    manifest.build.as_mut().unwrap().source_repo = Some("".to_string());
+
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    for code in [
+        "artifact_sha256_invalid",
+        "row_identity_sha256_invalid",
+        "embedding_model_revision_empty",
+        "embedding_corpus_digest_invalid",
+        "embedding_matrix_digest_invalid",
+        "embedding_normalization_empty",
+        "build_source_repo_empty",
+    ] {
+        assert!(
+            report.errors.iter().any(|issue| issue.code == code),
+            "missing {code}: {:?}",
+            report.errors
+        );
+    }
+}
+
+#[test]
 fn artifact_metadata_mismatches_are_reported_with_stable_codes() {
     let root = tempfile::tempdir().unwrap();
     let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
@@ -131,6 +227,51 @@ fn artifact_metadata_mismatches_are_reported_with_stable_codes() {
         .errors
         .iter()
         .any(|issue| issue.code == "artifact_dim_mismatch"));
+
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    manifest.artifact.params = ManifestIndexParams::RankQuant { bits: 4 };
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    assert!(report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "artifact_params_mismatch"));
+
+    let case = tempfile::tempdir_in(root.path()).unwrap();
+    let bitmap = write_index_kind(case.path(), FixtureKind::Bitmap);
+    let manifest_path = case.path().join("bitmap.manifest.json");
+    let mut manifest = create_manifest_for_index(
+        &bitmap,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap();
+    manifest.artifact.params = ManifestIndexParams::Bitmap { n_top: 8 };
+    let report = verify_manifest_with_base(manifest, case.path(), VerifyOptions::default());
+    assert!(report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "artifact_params_mismatch"));
+}
+
+#[test]
+fn missing_artifact_and_row_count_mismatch_are_reported() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    manifest.row_identity = RowIdentity::RowIdIdentity { row_count: 1 };
+    let report = verify_manifest_with_base(manifest.clone(), temp.path(), VerifyOptions::default());
+    assert!(report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "artifact_row_count_mismatch"));
+
+    manifest.row_identity = RowIdentity::RowIdIdentity { row_count: 2 };
+    fs::remove_file(temp.path().join(&manifest.artifact.path)).unwrap();
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    assert!(report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "artifact_path_unavailable"));
 }
 
 #[test]
@@ -140,11 +281,15 @@ fn path_policy_rejects_escapes_and_absolute_paths_by_default() {
     fs::create_dir(&base).unwrap();
     let index = write_index(root.path());
     let manifest_path = base.join("manifest.json");
-    let mut manifest = create_manifest_for_index(
+    let mut manifest = create_manifest_for_index_with_options(
         &index,
         CreateRowIdentity::RowIdIdentity,
         "test-embedding",
         &manifest_path,
+        CreateManifestOptions {
+            allow_path_escape: true,
+            ..CreateManifestOptions::default()
+        },
     )
     .unwrap();
 
@@ -197,11 +342,15 @@ fn symlink_escape_reports_observed_canonical_path() {
     let index = write_index(&outside);
     symlink(&index, base.join("link.tvrq")).unwrap();
     let manifest_path = base.join("manifest.json");
-    let mut manifest = create_manifest_for_index(
+    let mut manifest = create_manifest_for_index_with_options(
         &index,
         CreateRowIdentity::RowIdIdentity,
         "test-embedding",
         &manifest_path,
+        CreateManifestOptions {
+            allow_path_escape: true,
+            ..CreateManifestOptions::default()
+        },
     )
     .unwrap();
     manifest.artifact.path = "link.tvrq".to_string();
@@ -394,6 +543,110 @@ fn cli_create_verify_and_exit_codes() {
     assert_eq!(output.status.code(), Some(2));
 }
 
+#[test]
+fn create_outside_manifest_dir_requires_explicit_path_policy() {
+    let temp = tempfile::tempdir().unwrap();
+    let outside = temp.path().join("outside");
+    let manifests = temp.path().join("manifests");
+    fs::create_dir(&outside).unwrap();
+    let index = write_index(&outside);
+    let manifest_path = manifests.join("manifest.json");
+
+    let err = create_manifest_for_index(
+        &index,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap_err();
+    assert!(err.to_string().contains("outside manifest directory"));
+
+    let bin = env!("CARGO_BIN_EXE_ordvec-manifest");
+    let output = Command::new(bin)
+        .args([
+            "create",
+            "--index",
+            index.to_str().unwrap(),
+            "--row-id-is-identity",
+            "--embedding-model",
+            "test-embedding",
+            "--out",
+            manifest_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+
+    let output = Command::new(bin)
+        .args([
+            "create",
+            "--index",
+            index.to_str().unwrap(),
+            "--row-id-is-identity",
+            "--embedding-model",
+            "test-embedding",
+            "--out",
+            manifest_path.to_str().unwrap(),
+            "--allow-path-escape",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let output = Command::new(bin)
+        .args(["verify", "--manifest", manifest_path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+
+    let output = Command::new(bin)
+        .args([
+            "verify",
+            "--manifest",
+            manifest_path.to_str().unwrap(),
+            "--allow-path-escape",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn verify_index_manifest_uses_explicit_index_override() {
+    let temp = tempfile::tempdir().unwrap();
+    let index = write_index(temp.path());
+    let manifest_path = temp.path().join("manifest.json");
+    let mut manifest = create_manifest_for_index(
+        &index,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap();
+    manifest.artifact.path = "missing.tvrq".to_string();
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+
+    let report = verify_index_manifest(
+        PathBuf::from("index.tvrq"),
+        &manifest_path,
+        VerifyOptions::default(),
+    )
+    .unwrap();
+    assert!(report.ok, "{:?}", report.errors);
+}
+
 #[cfg(feature = "sqlite")]
 #[test]
 fn sqlite_cache_is_explicit_and_activation_reverifies_by_default() {
@@ -498,6 +751,10 @@ fn sqlite_cache_is_explicit_and_activation_reverifies_by_default() {
     )
     .unwrap();
     assert!(!forced.ok);
+    assert!(forced
+        .warnings
+        .iter()
+        .any(|issue| issue.code == "sqlite_activation_forced"));
 
     let bin = env!("CARGO_BIN_EXE_ordvec-manifest");
     let output = Command::new(bin)
@@ -509,8 +766,16 @@ fn sqlite_cache_is_explicit_and_activation_reverifies_by_default() {
             "--manifest",
             manifest_path.to_str().unwrap(),
             "--force",
+            "--json",
         ])
         .output()
         .unwrap();
-    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(output.status.code(), Some(0));
+    let forced_report: ordvec_manifest::VerificationReport =
+        serde_json::from_slice(&output.stdout).unwrap();
+    assert!(!forced_report.ok);
+    assert!(forced_report
+        .warnings
+        .iter()
+        .any(|issue| issue.code == "sqlite_activation_forced"));
 }

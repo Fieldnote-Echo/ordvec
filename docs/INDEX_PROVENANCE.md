@@ -47,6 +47,11 @@ that pre-load step:
 cargo run -p ordvec-manifest -- verify --manifest path/to/index.manifest.json
 ```
 
+The `create` command emits default-verifiable manifests by default: artifact
+and row-identity paths must resolve under the output manifest directory. If a
+deployment intentionally keeps those files outside that directory, create with
+`--allow-path-escape` and verify with the matching path-policy flag.
+
 The manifest verifier checks:
 
 - the index bytes against the manifest's SHA-256 digest;

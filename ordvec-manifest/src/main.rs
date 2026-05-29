@@ -1,7 +1,8 @@
 use clap::{Parser, Subcommand};
 use ordvec_manifest::{
-    create_manifest_for_index, load_manifest_file, sha256_file, verify_manifest,
-    write_manifest_file, CreateRowIdentity, ManifestDocument, ManifestError, VerifyOptions,
+    create_manifest_for_index_with_options, load_manifest_file, sha256_file, verify_manifest,
+    write_manifest_file, CreateManifestOptions, CreateRowIdentity, ManifestDocument, ManifestError,
+    VerifyOptions,
 };
 use serde_json::json;
 use std::fs;
@@ -55,6 +56,10 @@ enum Commands {
         embedding_model: String,
         #[arg(long)]
         out: PathBuf,
+        #[arg(long)]
+        allow_absolute_paths: bool,
+        #[arg(long)]
+        allow_path_escape: bool,
     },
     #[cfg(feature = "sqlite")]
     Sqlite {
@@ -179,6 +184,8 @@ fn run() -> Result<i32, ManifestError> {
             row_id_is_identity,
             embedding_model,
             out,
+            allow_absolute_paths,
+            allow_path_escape,
         } => {
             let row_identity = match (row_map, row_id_is_identity) {
                 (Some(_), true) => {
@@ -197,7 +204,16 @@ fn run() -> Result<i32, ManifestError> {
             if let Some(parent) = out.parent().filter(|p| !p.as_os_str().is_empty()) {
                 fs::create_dir_all(parent)?;
             }
-            let manifest = create_manifest_for_index(&index, row_identity, embedding_model, &out)?;
+            let manifest = create_manifest_for_index_with_options(
+                &index,
+                row_identity,
+                embedding_model,
+                &out,
+                CreateManifestOptions {
+                    allow_absolute_paths,
+                    allow_path_escape,
+                },
+            )?;
             write_manifest_file(&manifest, &out)?;
             println!("{}", out.display());
             Ok(0)
@@ -264,7 +280,7 @@ fn run_sqlite(command: SqliteCommands) -> Result<i32, ManifestError> {
                 force,
             )?;
             emit_report(&report, as_json)?;
-            Ok(if report.ok {
+            Ok(if report.ok || force {
                 0
             } else {
                 EXIT_VERIFICATION_FAILED

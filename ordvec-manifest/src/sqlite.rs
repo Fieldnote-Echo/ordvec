@@ -51,9 +51,18 @@ pub fn activate(
     let mut conn = Connection::open(db_path).map_err(sqlite_err)?;
     init(&conn)?;
     let store_options = options.clone();
-    let report = verify_manifest(document, options);
-    let cache_key =
-        cache_key_from_report(manifest_path.as_ref(), &report, document, &store_options)?;
+    let mut report = verify_manifest(document, options);
+    if !report.ok && force {
+        report.warnings.push(ReportIssue::new(
+            "sqlite_activation_forced",
+            "sqlite activation was forced even though verification failed",
+        ));
+    }
+    let cache_key = if !report.ok && force {
+        None
+    } else {
+        cache_key_from_report(manifest_path.as_ref(), &report, document, &store_options)?
+    };
     store_report(
         &mut conn,
         document,

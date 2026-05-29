@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Bitmap`, and `SignBitmap` headers without allocating payloads.
 - Added the repo-local, publish=false `ordvec-manifest` crate with a strict v1
   JSON schema, artifact and row-identity verification, attestation shape
-  checks, a CLI, and optional SQLite registry/cache support.
+  checks, a CLI, and optional SQLite cache/audit support with one active
+  manifest pointer.
 
 ### Documentation
 
