@@ -7,11 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Added `probe_index_metadata` to inspect persisted `Rank`, `RankQuant`,
+  `Bitmap`, and `SignBitmap` headers without allocating payloads.
+- Added the repo-local, publish=false `ordvec-manifest` crate with a strict v1
+  JSON schema, artifact and row-identity verification, attestation shape
+  checks, a CLI, and optional SQLite registry/cache support.
+
 ### Documentation
 
 - Reframed bitmap-overlap docs around the checked Lean proof spine: query
   symmetry, quotient sufficiency, finite threshold optimality, and idealized
   hypergeometric calibration, while preserving the real-encoder caveats.
+- Documented sidecar manifest verification as a pre-load provenance check that
+  does not sign, manage keys, call networks, or decide trust policy.
 
 ## [0.2.0] - 2026-05-26
 

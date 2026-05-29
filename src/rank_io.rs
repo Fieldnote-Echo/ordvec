@@ -65,6 +65,41 @@ const TVBM_MAGIC: &[u8; 4] = b"TVBM";
 const TVSB_MAGIC: &[u8; 4] = b"TVSB";
 const VERSION: u8 = 1;
 
+/// Persisted index family identified from an on-disk ordvec index header.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum IndexKind {
+    Rank,
+    RankQuant,
+    Bitmap,
+    SignBitmap,
+}
+
+/// Format-specific parameters declared by an on-disk ordvec index header.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum IndexParams {
+    Rank,
+    RankQuant { bits: u8 },
+    Bitmap { n_top: usize },
+    SignBitmap,
+}
+
+/// Header-derived metadata for a persisted ordvec index.
+///
+/// [`probe_index_metadata`] validates the fixed header, declared dimensions,
+/// version, payload byte count, and exact file length, but deliberately does
+/// not allocate or inspect the payload rows. Full row-invariant validation
+/// remains the job of the index loaders.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct IndexMetadata {
+    pub kind: IndexKind,
+    pub format_version: u8,
+    pub dim: usize,
+    pub vector_count: usize,
+    pub bytes_per_vec: usize,
+    pub params: IndexParams,
+    pub file_size_bytes: u64,
+}
+
 /// Largest accepted `dim` from a loaded file. Matches `u16::MAX` so the
 /// rank transform's `u16` invariant in [`crate::Rank`] is honoured.
 pub const MAX_DIM: usize = u16::MAX as usize;
@@ -216,6 +251,187 @@ fn check_payload_bytes(payload_bytes: usize) -> io::Result<()> {
         )));
     }
     Ok(())
+}
+
+fn read_u32_le<R: Read>(reader: &mut R) -> io::Result<u32> {
+    let mut buf = [0u8; 4];
+    reader.read_exact(&mut buf)?;
+    Ok(u32::from_le_bytes(buf))
+}
+
+fn read_version<R: Read>(reader: &mut R, label: &str) -> io::Result<u8> {
+    let mut ver = [0u8; 1];
+    reader.read_exact(&mut ver)?;
+    if ver[0] != VERSION {
+        return Err(invalid(format!("unsupported {label} version: {}", ver[0])));
+    }
+    Ok(ver[0])
+}
+
+/// Probe an ordvec index file's fixed header and declared byte shape.
+///
+/// This is the allocation-resistant metadata path used by external manifest
+/// verification. It reads only the magic/version/parameter header plus file
+/// metadata. It validates the same header domains as the full loaders and
+/// requires the declared payload length to exactly match the remaining file
+/// length, but it does not read or validate row payload invariants such as Rank
+/// permutations, RankQuant constant composition, or Bitmap popcounts.
+pub fn probe_index_metadata(path: impl AsRef<Path>) -> io::Result<IndexMetadata> {
+    let file = File::open(path)?;
+    let file_size_bytes = file.metadata()?.len();
+    let mut f = BufReader::new(file);
+    let mut magic = [0u8; 4];
+    f.read_exact(&mut magic)?;
+    match &magic {
+        TVR_MAGIC => probe_rank_metadata(&mut f, file_size_bytes),
+        TVRQ_MAGIC => probe_rankquant_metadata(&mut f, file_size_bytes),
+        TVBM_MAGIC => probe_bitmap_metadata(&mut f, file_size_bytes),
+        TVSB_MAGIC => probe_sign_bitmap_metadata(&mut f, file_size_bytes),
+        _ => Err(invalid("unknown ordvec index magic")),
+    }
+}
+
+fn probe_rank_metadata<R: Read + Seek>(
+    reader: &mut R,
+    file_size_bytes: u64,
+) -> io::Result<IndexMetadata> {
+    let format_version = read_version(reader, "TVR1")?;
+    let dim = read_u32_le(reader)? as usize;
+    check_dim(dim)?;
+    let vector_count = read_u32_le(reader)? as usize;
+    check_n_vectors(vector_count)?;
+    let bytes_per_vec = dim
+        .checked_mul(2)
+        .ok_or_else(|| invalid("bytes_per_vec overflows usize"))?;
+    let payload_bytes = vector_count
+        .checked_mul(bytes_per_vec)
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    check_payload_matches_file(reader, file_size_bytes, payload_bytes)?;
+    Ok(IndexMetadata {
+        kind: IndexKind::Rank,
+        format_version,
+        dim,
+        vector_count,
+        bytes_per_vec,
+        params: IndexParams::Rank,
+        file_size_bytes,
+    })
+}
+
+fn probe_rankquant_metadata<R: Read + Seek>(
+    reader: &mut R,
+    file_size_bytes: u64,
+) -> io::Result<IndexMetadata> {
+    let format_version = read_version(reader, "TVRQ")?;
+    let mut bits_buf = [0u8; 1];
+    reader.read_exact(&mut bits_buf)?;
+    let bits = bits_buf[0];
+    if !matches!(bits, 1 | 2 | 4) {
+        return Err(invalid(format!(
+            "unsupported TVRQ bits: {bits} (expected 1, 2, or 4)"
+        )));
+    }
+    let dim = read_u32_le(reader)? as usize;
+    check_dim(dim)?;
+    let n_buckets = 1usize << bits;
+    if !dim.is_multiple_of(n_buckets) {
+        return Err(invalid(format!(
+            "TVRQ dim {dim} is not a multiple of 2^bits = {n_buckets}; \
+             constant-composition invariant violated"
+        )));
+    }
+    let codes_per_byte = (8 / bits) as usize;
+    if !dim.is_multiple_of(codes_per_byte) {
+        return Err(invalid(format!(
+            "TVRQ dim {dim} is not a multiple of codes_per_byte = {codes_per_byte}"
+        )));
+    }
+    let vector_count = read_u32_le(reader)? as usize;
+    check_n_vectors(vector_count)?;
+    let payload_bytes = vector_count
+        .checked_mul(dim)
+        .and_then(|x| x.checked_mul(bits as usize))
+        .map(|x| x / 8)
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    check_payload_matches_file(reader, file_size_bytes, payload_bytes)?;
+    let bytes_per_vec = dim
+        .checked_mul(bits as usize)
+        .map(|x| x / 8)
+        .ok_or_else(|| invalid("bytes_per_vec overflows usize"))?;
+    Ok(IndexMetadata {
+        kind: IndexKind::RankQuant,
+        format_version,
+        dim,
+        vector_count,
+        bytes_per_vec,
+        params: IndexParams::RankQuant { bits },
+        file_size_bytes,
+    })
+}
+
+fn probe_bitmap_metadata<R: Read + Seek>(
+    reader: &mut R,
+    file_size_bytes: u64,
+) -> io::Result<IndexMetadata> {
+    let format_version = read_version(reader, "TVBM")?;
+    let dim = read_u32_le(reader)? as usize;
+    check_dim(dim)?;
+    if !dim.is_multiple_of(64) {
+        return Err(invalid(format!("TVBM dim {dim} is not a multiple of 64")));
+    }
+    let n_top = read_u32_le(reader)? as usize;
+    if n_top == 0 || n_top >= dim {
+        return Err(invalid(format!(
+            "TVBM n_top {n_top} must satisfy 0 < n_top < dim ({dim})"
+        )));
+    }
+    let vector_count = read_u32_le(reader)? as usize;
+    check_n_vectors(vector_count)?;
+    let qpv = dim / 64;
+    let payload_bytes = vector_count
+        .checked_mul(qpv)
+        .and_then(|x| x.checked_mul(8))
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    check_payload_matches_file(reader, file_size_bytes, payload_bytes)?;
+    Ok(IndexMetadata {
+        kind: IndexKind::Bitmap,
+        format_version,
+        dim,
+        vector_count,
+        bytes_per_vec: dim / 8,
+        params: IndexParams::Bitmap { n_top },
+        file_size_bytes,
+    })
+}
+
+fn probe_sign_bitmap_metadata<R: Read + Seek>(
+    reader: &mut R,
+    file_size_bytes: u64,
+) -> io::Result<IndexMetadata> {
+    let format_version = read_version(reader, "TVSB")?;
+    let dim = read_u32_le(reader)? as usize;
+    check_sign_bitmap_dim(dim)?;
+    let vector_count = read_u32_le(reader)? as usize;
+    check_n_vectors(vector_count)?;
+    let qpv = dim / 64;
+    let payload_bytes = vector_count
+        .checked_mul(qpv)
+        .and_then(|x| x.checked_mul(8))
+        .ok_or_else(|| invalid("payload size overflows usize"))?;
+    check_payload_bytes(payload_bytes)?;
+    check_payload_matches_file(reader, file_size_bytes, payload_bytes)?;
+    Ok(IndexMetadata {
+        kind: IndexKind::SignBitmap,
+        format_version,
+        dim,
+        vector_count,
+        bytes_per_vec: dim / 8,
+        params: IndexParams::SignBitmap,
+        file_size_bytes,
+    })
 }
 
 // -------------------------------------------------------------------
@@ -661,9 +877,10 @@ pub(crate) fn load_sign_bitmap(path: impl AsRef<Path>) -> io::Result<(usize, usi
 #[cfg(test)]
 mod tests {
     use super::{
-        load_rank, load_rankquant, write_bitmap, write_rank, write_rankquant, write_sign_bitmap,
+        load_bitmap, load_rank, load_rankquant, probe_index_metadata, write_bitmap, write_rank,
+        write_rankquant, write_sign_bitmap, IndexKind, IndexParams, MAX_DIM, MAX_VECTORS, VERSION,
     };
-    use crate::Rank;
+    use crate::{Bitmap, Rank, RankQuant, SignBitmap};
     use std::io::Write;
     use std::path::PathBuf;
 
@@ -682,6 +899,182 @@ mod tests {
         ));
         std::fs::File::create(&p).unwrap().write_all(bytes).unwrap();
         p
+    }
+
+    fn temp_index_path(suffix: &str) -> PathBuf {
+        let mut p = std::env::temp_dir();
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        p.push(format!(
+            "rank_io_probe_{}_{}_{}",
+            std::process::id(),
+            nonce,
+            suffix
+        ));
+        p
+    }
+
+    #[test]
+    fn probe_metadata_matches_full_loaders_on_generated_fixtures() {
+        let mut paths = Vec::new();
+
+        let rank_path = temp_index_path("rank.tvr");
+        let mut rank = Rank::new(8);
+        rank.add(&[
+            1.0, 3.0, 2.0, 4.0, 8.0, 7.0, 6.0, 5.0, 8.0, 6.0, 7.0, 5.0, 1.0, 2.0, 3.0, 4.0,
+        ]);
+        rank.write(&rank_path).unwrap();
+        let meta = probe_index_metadata(&rank_path).unwrap();
+        let loaded = Rank::load(&rank_path).unwrap();
+        assert_eq!(meta.kind, IndexKind::Rank);
+        assert_eq!(meta.params, IndexParams::Rank);
+        assert_eq!(meta.format_version, VERSION);
+        assert_eq!(meta.dim, loaded.dim());
+        assert_eq!(meta.vector_count, loaded.len());
+        assert_eq!(meta.bytes_per_vec, loaded.bytes_per_vec());
+        assert_eq!(
+            meta.file_size_bytes,
+            std::fs::metadata(&rank_path).unwrap().len()
+        );
+        paths.push(rank_path);
+
+        let quant_path = temp_index_path("rankquant.tvrq");
+        let mut quant = RankQuant::new(16, 2);
+        let quant_docs: Vec<f32> = (0..32).map(|i| i as f32 - 11.0).collect();
+        quant.add(&quant_docs);
+        quant.write(&quant_path).unwrap();
+        let meta = probe_index_metadata(&quant_path).unwrap();
+        let loaded = RankQuant::load(&quant_path).unwrap();
+        assert_eq!(meta.kind, IndexKind::RankQuant);
+        assert_eq!(
+            meta.params,
+            IndexParams::RankQuant {
+                bits: loaded.bits()
+            }
+        );
+        assert_eq!(meta.format_version, VERSION);
+        assert_eq!(meta.dim, loaded.dim());
+        assert_eq!(meta.vector_count, loaded.len());
+        assert_eq!(meta.bytes_per_vec, loaded.bytes_per_vec());
+        assert_eq!(
+            meta.file_size_bytes,
+            std::fs::metadata(&quant_path).unwrap().len()
+        );
+        paths.push(quant_path);
+
+        let bitmap_path = temp_index_path("bitmap.tvbm");
+        let mut bitmap = Bitmap::new(64, 16);
+        let bitmap_docs: Vec<f32> = (0..128).map(|i| ((i * 17) % 31) as f32).collect();
+        bitmap.add(&bitmap_docs);
+        bitmap.write(&bitmap_path).unwrap();
+        let meta = probe_index_metadata(&bitmap_path).unwrap();
+        let loaded = Bitmap::load(&bitmap_path).unwrap();
+        assert_eq!(meta.kind, IndexKind::Bitmap);
+        assert_eq!(
+            meta.params,
+            IndexParams::Bitmap {
+                n_top: loaded.n_top()
+            }
+        );
+        assert_eq!(meta.format_version, VERSION);
+        assert_eq!(meta.dim, loaded.dim());
+        assert_eq!(meta.vector_count, loaded.len());
+        assert_eq!(meta.bytes_per_vec, loaded.bytes_per_vec());
+        assert_eq!(
+            meta.file_size_bytes,
+            std::fs::metadata(&bitmap_path).unwrap().len()
+        );
+        paths.push(bitmap_path);
+
+        let sign_path = temp_index_path("sign_bitmap.tvsb");
+        let mut sign = SignBitmap::new(64);
+        let sign_docs: Vec<f32> = (0usize..128)
+            .map(|i| if i.is_multiple_of(3) { 1.0 } else { -1.0 })
+            .collect();
+        sign.add(&sign_docs);
+        sign.write(&sign_path).unwrap();
+        let meta = probe_index_metadata(&sign_path).unwrap();
+        let loaded = SignBitmap::load(&sign_path).unwrap();
+        assert_eq!(meta.kind, IndexKind::SignBitmap);
+        assert_eq!(meta.params, IndexParams::SignBitmap);
+        assert_eq!(meta.format_version, VERSION);
+        assert_eq!(meta.dim, loaded.dim());
+        assert_eq!(meta.vector_count, loaded.len());
+        assert_eq!(meta.bytes_per_vec, loaded.bytes_per_vec());
+        assert_eq!(
+            meta.file_size_bytes,
+            std::fs::metadata(&sign_path).unwrap().len()
+        );
+        paths.push(sign_path);
+
+        for path in paths {
+            std::fs::remove_file(path).ok();
+        }
+    }
+
+    #[test]
+    fn probe_rejects_header_and_length_errors_without_payload_allocation() {
+        let wrong_magic = forge("wrong_magic", b"NOPE");
+        let err = probe_index_metadata(&wrong_magic).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        std::fs::remove_file(&wrong_magic).ok();
+
+        let bad_version = forge("bad_version", b"TVR1\x09");
+        let err = probe_index_metadata(&bad_version).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        std::fs::remove_file(&bad_version).ok();
+
+        let truncated = forge("truncated_header", b"TVR1\x01");
+        let err = probe_index_metadata(&truncated).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+        std::fs::remove_file(&truncated).ok();
+
+        let mut length_mismatch = Vec::new();
+        length_mismatch.extend_from_slice(b"TVR1");
+        length_mismatch.push(VERSION);
+        length_mismatch.extend_from_slice(&8u32.to_le_bytes());
+        length_mismatch.extend_from_slice(&1u32.to_le_bytes());
+        let length_mismatch = forge("length_mismatch", &length_mismatch);
+        let err = probe_index_metadata(&length_mismatch).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        std::fs::remove_file(&length_mismatch).ok();
+
+        let mut huge_declared = Vec::new();
+        huge_declared.extend_from_slice(b"TVR1");
+        huge_declared.push(VERSION);
+        huge_declared.extend_from_slice(&(MAX_DIM as u32).to_le_bytes());
+        huge_declared.extend_from_slice(&(MAX_VECTORS as u32).to_le_bytes());
+        let huge_declared = forge("huge_declared", &huge_declared);
+        let err = probe_index_metadata(&huge_declared).unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidData);
+        assert!(
+            err.to_string().contains("MAX_PAYLOAD"),
+            "unexpected error: {err}"
+        );
+        std::fs::remove_file(&huge_declared).ok();
+    }
+
+    #[test]
+    fn probe_does_not_validate_payload_row_invariants() {
+        let mut forged = Vec::new();
+        forged.extend_from_slice(b"TVBM");
+        forged.push(VERSION);
+        forged.extend_from_slice(&64u32.to_le_bytes());
+        forged.extend_from_slice(&16u32.to_le_bytes());
+        forged.extend_from_slice(&1u32.to_le_bytes());
+        forged.extend_from_slice(&0u64.to_le_bytes());
+        let path = forge("bad_bitmap_payload.tvbm", &forged);
+
+        let meta = probe_index_metadata(&path).expect("probe reads only metadata");
+        assert_eq!(meta.kind, IndexKind::Bitmap);
+        assert_eq!(meta.dim, 64);
+        assert_eq!(meta.vector_count, 1);
+
+        let load_err = load_bitmap(&path).unwrap_err();
+        assert_eq!(load_err.kind(), std::io::ErrorKind::InvalidData);
+        std::fs::remove_file(&path).ok();
     }
 
     // -------------------------------------------------------------------

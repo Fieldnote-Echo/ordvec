@@ -1,0 +1,35 @@
+[package]
+name = "ordvec-manifest"
+version = "0.0.0"
+edition = "2021"
+rust-version = "1.89"
+publish = false
+license = "MIT OR Apache-2.0"
+description = "Repo-local ordvec index manifest verifier"
+
+[lib]
+name = "ordvec_manifest"
+path = "src/lib.rs"
+
+[[bin]]
+name = "ordvec-manifest"
+path = "src/main.rs"
+
+[dependencies]
+chrono = { version = "0.4.44", default-features = false, features = ["clock", "std"] }
+clap = { version = "4.6.1", features = ["derive"] }
+hex = "0.4.3"
+ordvec = { path = ".." }
+rusqlite = { version = "0.39.0", optional = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sha2 = "0.10.9"
+uuid = { version = "1.23.0", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3.27.0"
+
+[features]
+default = []
+sqlite = ["dep:rusqlite"]
+sqlite-bundled = ["sqlite", "rusqlite/bundled"]
