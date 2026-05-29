@@ -19,9 +19,9 @@ updates:
         patterns:
           - "*"
 
-  # Cargo workspace root: core `ordvec` + the `ordvec-python` binding member
-  # (single workspace Cargo.lock). Group minor+patch into one PR; majors stay
-  # separate for manual review.
+  # Cargo workspace root: core `ordvec`, C ABI, Python binding, and repo-local
+  # manifest verifier (single workspace Cargo.lock). Group minor+patch into one
+  # PR; majors stay separate for manual review.
   - package-ecosystem: "cargo"
     directory: "/"
     schedule:

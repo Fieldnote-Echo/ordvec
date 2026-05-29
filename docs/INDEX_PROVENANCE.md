@@ -40,7 +40,50 @@ The loaders validate **structure, not origin or truth**:
 
 If you load index files that were produced elsewhere, transferred over a
 network, or stored on shared/mutable infrastructure, verify them **before**
-loading using whatever your deployment already trusts:
+loading. The repo-local `ordvec-manifest` crate provides a sidecar verifier for
+that pre-load step:
+
+```sh
+cargo run -p ordvec-manifest -- verify --manifest path/to/index.manifest.json
+```
+
+The `create` command emits default-verifiable manifests by default: artifact
+and row-identity paths must resolve under the output manifest directory. If a
+deployment intentionally keeps those files outside that directory, create with
+`--allow-path-escape` and verify with the matching path-policy flag.
+
+The manifest verifier checks:
+
+- the index bytes against the manifest's SHA-256 digest;
+- the fixed index header metadata (`Rank`, `RankQuant`, `Bitmap`, or
+  `SignBitmap`) without allocating the payload;
+- declared dimension, vector count, bytes-per-vector, format version, and
+  format parameters against the probed metadata;
+- the `embedding` block as the encoder/vector representation that produced
+  the index artifact;
+- row identity, either explicit `row_id_identity` or a strict JSONL row map
+  whose `row_id` equals the zero-based line number and whose `db_id` is
+  non-empty, NUL-free, and unique by default;
+- optional `calibration` profile references, checking profile identity,
+  path/hash integrity, encoder identity, and ordinalization compatibility;
+- attestation **shape** only: predicate type, builder id when present, and at
+  least one subject SHA-256 matching the artifact when attestations are
+  supplied.
+
+When present, `calibration` binds an index artifact to a hashed ordinal profile
+used to interpret overlap, bucket, sign, or rank evidence under a calibrated
+null. The verifier checks profile identity, path/hash integrity, encoder
+identity, and ordinalization compatibility; it does not judge whether the null
+model is scientifically adequate and does not compute likelihood ratios or tail
+probabilities. Calibration profiles must match the encoder identity declared by
+`embedding`; cross-encoder calibration is rejected by default. The
+`uniform_hypergeometric` null is reserved for top-K overlap calibration and is
+not accepted for bucket, sign, or rank-position ordinalizations.
+
+Recipes that consume sidecar manifests should run the verifier first, then
+load/search/rerank only if verification succeeds.
+
+You can also verify using whatever your deployment already trusts:
 
 - a checksum manifest (e.g. SHA-256) recorded by the build that produced the
   index, verified at load time;
@@ -48,8 +91,8 @@ loading using whatever your deployment already trusts:
 - a signature / attestation layer (e.g. Sigstore, GitHub artifact attestations)
   over the index files.
 
-`ordvec` deliberately ships **no** built-in signing/MAC layer today: without a
-concrete deployment requiring it, an in-format crypto layer would add key
-management with no clear owner. A sidecar verifier (e.g. an `ordvec verify`
-utility, or an external HMAC/BLAKE3 manifest) can be added later **without a
-file-format change** if a real deployment needs tamper-evidence.
+`ordvec-manifest` is not a trust oracle. It does **not** sign, manage keys,
+call networks, mutate index files, change the C ABI, or decide whether a
+builder or signer is trusted. `ordvec` deliberately ships **no** built-in
+signing/MAC layer today: without a concrete deployment requiring it, an
+in-format crypto layer would add key management with no clear owner.

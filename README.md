@@ -156,6 +156,8 @@ Wheels target CPython 3.10+ (abi3); to build from source instead, see
 - **Index-file trust model:**
   [`docs/INDEX_PROVENANCE.md`](docs/INDEX_PROVENANCE.md),
   [`THREAT_MODEL.md`](THREAT_MODEL.md)
+- **Repo-local manifest verifier:**
+  [`ordvec-manifest/`](ordvec-manifest/) (`cargo run -p ordvec-manifest -- verify --manifest ...`)
 - **C ABI:**
   [`docs/c-api.md`](docs/c-api.md)
 - **Formal proof spine:** [`ordvec-formalization`](https://github.com/Fieldnote-Echo/ordvec-formalization),
@@ -214,10 +216,12 @@ The on-disk formats (`.tvr` / `.tvrq` / `.tvbm` / `.tvsb`) carry **no built-in
 checksum, MAC, or signature — by design.** The loaders validate *structure*
 (magic, version, bounds, exact-length payload) but not *origin*: a
 structurally valid file can still be untrusted. If an index file crosses a
-trust boundary (network transfer, shared storage), verifying it is the
-caller's responsibility — e.g. a SHA-256 manifest, artifact-store integrity,
-or Sigstore attestation. No in-format crypto is shipped because it would add
-key management the library can't own. See
+trust boundary (network transfer, shared storage), verify it before loading.
+This repo includes a publish=false sidecar CLI, `ordvec-manifest`, that binds an
+index file to a JSON manifest by SHA-256, header metadata, row identity, and
+attestation shape checks. It does not sign artifacts, manage keys, or decide
+deployment trust policy. No in-format crypto is shipped because it would add key
+management the library can't own. See
 [`docs/INDEX_PROVENANCE.md`](docs/INDEX_PROVENANCE.md) and
 [`THREAT_MODEL.md`](THREAT_MODEL.md).
 
