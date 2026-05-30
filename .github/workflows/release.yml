@@ -37,10 +37,12 @@
 #
 # Provenance / attestation, soup to nuts (all genuine, nothing faked):
 #   * SLSA generator -> `*.intoto.jsonl` on the Release  (OpenSSF Scorecard
-#     Signed-Releases provenance probe -> 10/10; SLSA Build L3).
+#     Signed-Releases provenance probe; older unsigned releases may keep that
+#     score below 10 temporarily; SLSA Build L3).
 #   * actions/attest-build-provenance -> GitHub attestation store + a
 #     `*.sigstore.json` bundle on the Release (`gh attestation verify`; also the
-#     Scorecard signing probe -> 8, a backup if the .intoto.jsonl ever regresses).
+#     Scorecard signing probe sees this asset as a backup if the .intoto.jsonl
+#     ever regresses).
 #   * gh-action-pypi-publish -> PEP 740 attestations on PyPI (Integrity API).
 #   * post-publish PyPI JSON hash check -> every served wheel/sdist digest
 #     matches the staged dist files.
@@ -218,8 +220,9 @@ jobs:
         with:
           toolchain: stable
       - name: Package the crate
-        # Emits target/package/ordvec-<version>.crate — the same content
-        # `cargo publish` uploads, so the provenance covers the published artifact.
+        # Emits the SLSA-attested .crate artifact. `publish-crate` later
+        # compares both a local repackage and the crates.io-served artifact to
+        # this file.
         run: cargo package -p ordvec --locked
       - name: Generate CycloneDX SBOM for the crate
         run: |

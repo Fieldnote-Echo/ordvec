@@ -263,13 +263,14 @@ Collaboration we're actively seeking:
 - **Independent reproduction** — re-running the benchmark on other hardware
   and reporting the numbers.
 
-If that's your area, see [GOVERNANCE.md](GOVERNANCE.md) and open an issue or a
-discussion.
+If that's your area, see
+[GOVERNANCE.md](https://github.com/Fieldnote-Echo/ordvec/blob/main/GOVERNANCE.md)
+and open an issue or a discussion.
 
 ## Contributing
 
 Contributions to the code, the docs, and the paper are all welcome — see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/Fieldnote-Echo/ordvec/blob/main/CONTRIBUTING.md).
 
 ## Minimum supported Rust version
 

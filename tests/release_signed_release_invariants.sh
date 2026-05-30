@@ -2,8 +2,10 @@
 #
 # Signed-release / provenance invariants — pinned in CI.
 #
-# release.yml's signed-release graph is what gets us OpenSSF Scorecard
-# Signed-Releases = 10 and keeps the build-attest-publish chain honest:
+# release.yml's signed-release graph attaches the .intoto.jsonl and Sigstore
+# assets that OpenSSF Scorecard detects for Signed-Releases, while older
+# unsigned releases may keep the score below 10 temporarily. The same graph
+# keeps the build-attest-publish chain honest:
 #
 #     build-{crate,wheels,sdist}                  (artifacts)
 #         |
