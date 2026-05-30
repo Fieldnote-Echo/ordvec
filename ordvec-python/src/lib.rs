@@ -79,7 +79,12 @@ fn check_width(got: usize, dim: usize) -> PyResult<()> {
 /// Mirror the core `add` capacity guard before releasing the GIL and entering
 /// Rust core asserts. Public Python `add()` methods should raise `ValueError`
 /// for over-capacity input, not a pyo3 `PanicException`.
-fn check_add_capacity(current: usize, adding: usize, elems_per_vec: usize) -> PyResult<()> {
+fn check_add_capacity(
+    current: usize,
+    adding: usize,
+    elems_per_vec: usize,
+    elem_size: usize,
+) -> PyResult<()> {
     let new_n = current
         .checked_add(adding)
         .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("n_vectors overflows usize"))?;
@@ -89,10 +94,13 @@ fn check_add_capacity(current: usize, adding: usize, elems_per_vec: usize) -> Py
             "index would exceed MAX_VECTORS ({max}); had {current}, adding {adding}"
         )));
     }
-    new_n.checked_mul(elems_per_vec).ok_or_else(|| {
+    let total_elems = new_n.checked_mul(elems_per_vec).ok_or_else(|| {
         pyo3::exceptions::PyValueError::new_err(
             "index buffer length (n_vectors * elems_per_vec) overflows usize",
         )
+    })?;
+    total_elems.checked_mul(elem_size).ok_or_else(|| {
+        pyo3::exceptions::PyValueError::new_err("index buffer byte size overflows usize")
     })?;
     Ok(())
 }
@@ -432,7 +440,12 @@ impl Rank {
                 "array must be C-contiguous; call np.ascontiguousarray() first",
             )
         })?;
-        check_add_capacity(self.inner.len(), arr.nrows(), self.inner.dim())?;
+        check_add_capacity(
+            self.inner.len(),
+            arr.nrows(),
+            self.inner.dim(),
+            std::mem::size_of::<u16>(),
+        )?;
         // Release the GIL around the parallel rank-transform / pack so other
         // Python threads run during a bulk add. `slice` (`&[f32]`) and
         // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
@@ -613,7 +626,12 @@ impl RankQuant {
                 "array must be C-contiguous; call np.ascontiguousarray() first",
             )
         })?;
-        check_add_capacity(self.inner.len(), arr.nrows(), self.inner.bytes_per_vec())?;
+        check_add_capacity(
+            self.inner.len(),
+            arr.nrows(),
+            self.inner.bytes_per_vec(),
+            std::mem::size_of::<u8>(),
+        )?;
         // Release the GIL around the parallel rank-transform / pack so other
         // Python threads run during a bulk add. `slice` (`&[f32]`) and
         // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
@@ -835,7 +853,12 @@ impl Bitmap {
                 "array must be C-contiguous; call np.ascontiguousarray() first",
             )
         })?;
-        check_add_capacity(self.inner.len(), arr.nrows(), self.inner.dim() / 64)?;
+        check_add_capacity(
+            self.inner.len(),
+            arr.nrows(),
+            self.inner.dim() / 64,
+            std::mem::size_of::<u64>(),
+        )?;
         // Release the GIL around the parallel rank-transform / pack so other
         // Python threads run during a bulk add. `slice` (`&[f32]`) and
         // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
@@ -1180,7 +1203,12 @@ impl SignBitmap {
                 "array must be C-contiguous; call np.ascontiguousarray() first",
             )
         })?;
-        check_add_capacity(self.inner.len(), arr.nrows(), self.inner.dim() / 64)?;
+        check_add_capacity(
+            self.inner.len(),
+            arr.nrows(),
+            self.inner.dim() / 64,
+            std::mem::size_of::<u64>(),
+        )?;
         // Release the GIL around the parallel rank-transform / pack so other
         // Python threads run during a bulk add. `slice` (`&[f32]`) and
         // `&mut self.inner` are both `Ungil`, so no pointer juggling is needed.
@@ -1695,19 +1723,25 @@ mod tests {
 
     #[test]
     fn add_capacity_allows_exact_ceiling() {
-        check_add_capacity(MAX_VECTORS - 1, 1, 1).unwrap();
-        check_add_capacity(MAX_VECTORS, 0, 1).unwrap();
+        check_add_capacity(MAX_VECTORS - 1, 1, 1, 1).unwrap();
+        check_add_capacity(MAX_VECTORS, 0, 1, 1).unwrap();
     }
 
     #[test]
     fn add_capacity_rejects_vector_count_overflow() {
-        let err = check_add_capacity(MAX_VECTORS, 1, 1).unwrap_err();
+        let err = check_add_capacity(MAX_VECTORS, 1, 1, 1).unwrap_err();
         assert!(err.to_string().contains("MAX_VECTORS"));
     }
 
     #[test]
     fn add_capacity_rejects_buffer_length_overflow() {
-        let err = check_add_capacity(0, MAX_VECTORS, usize::MAX).unwrap_err();
+        let err = check_add_capacity(0, MAX_VECTORS, usize::MAX, 1).unwrap_err();
         assert!(err.to_string().contains("buffer length"));
+    }
+
+    #[test]
+    fn add_capacity_rejects_byte_size_overflow() {
+        let err = check_add_capacity(0, MAX_VECTORS, usize::MAX / 2, 4).unwrap_err();
+        assert!(err.to_string().contains("byte size"));
     }
 }
