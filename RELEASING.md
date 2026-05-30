@@ -126,8 +126,18 @@ filename. Until either is updated, the corresponding gated publish fails
      strategy. An interior commit that exists in history only from a PR branch
      has no push-to-main run (its CI ran as a `pull_request` on the branch)
      and so is not releasable.
-4. Get the maintainer's explicit go to publish.
-5. Push the version tag from `main` (signed):
+4. Run the manual release-settings audit before creating the tag:
+
+   ```sh
+   bash tests/release_environment_settings.sh
+   ```
+
+   This verifies the GitHub Environments still require the expected reviewer
+   and accept only the stable release tag pattern. Separately verify the
+   registry Trusted Publisher records by hand: crates.io must point to
+   `release.yml` / `crates-io`, and PyPI must point to `release.yml` / `pypi`.
+5. Get the maintainer's explicit go to publish.
+6. Push the version tag from `main` (signed):
 
    ```sh
    git tag -s vX.Y.Z -m "vX.Y.Z"
@@ -139,7 +149,7 @@ filename. Until either is updated, the corresponding gated publish fails
    generates the SLSA `*.intoto.jsonl`; and stages every artifact, the
    attestation bundle, and the provenance on the GitHub Release — **as a
    DRAFT**. It then pauses at the two registry environment gates.
-6. **Approve the two publish environments** when they pause in the Actions UI
+7. **Approve the two publish environments** when they pause in the Actions UI
    (one for `crates-io`, one for `pypi`). The required-reviewer approval is
    what authorises the registry push.
    - `publish-crate` first sha256-compares its repackaged `.crate` to the
@@ -152,7 +162,7 @@ filename. Until either is updated, the corresponding gated publish fails
    - `publish-pypi` also queries PyPI after upload and compares every served
      wheel/sdist SHA-256 digest against the staged `dist/` files before the
      GitHub Release can un-draft.
-7. Verify each published artifact and its provenance:
+8. Verify each published artifact and its provenance:
    - crates.io / docs.rs;
    - PyPI (confirm the post-publish hash-verification log, optionally
      `pip download ordvec==X.Y.Z` and inspect, plus check the PEP 740 attestation
