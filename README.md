@@ -170,7 +170,51 @@ The runtime dependency floor is `numpy>=2.2`.
 - **Paper (OrdVec / RankQuant):** _link TBD — see
   [Research collaboration](#research-collaboration)._
 
-## Reproducible benchmark
+## Benchmarks
+
+### Real-embedding retrieval
+
+The current paper-harness run is a real-embedding source-recovery task, not the
+in-repo synthetic stress test: 207,695 arXiv paper embeddings, 7,200 queries
+across title / first-sentence / middle-sentence / paraphrase query sets, 1024-D
+sentence-transformer embeddings, and `nDCG@10` / `hit@10` / `MRR@10` against the
+source paper id.
+
+The baseline rows use FAISS over L2-normalized FP32 embeddings:
+`IndexFlatIP` for dense exact search and `IndexHNSWFlat(M=32, efSearch=128)` for
+the tested HNSW configuration. The ordinal rows remove stored dense coordinate
+magnitudes:
+
+- **ordinal rank-cosine** stores mean-centered, L2-normalized
+  `argsort(argsort(.))` rank vectors and queries with the same rank-cosine
+  representation; and
+- **RankQuant b=2 asym** stores 2-bit ordinal document codes
+  (`256 bytes/vector` at dim=1024) and scores FP32 queries with
+  `RankQuant::search_asymmetric`.
+
+| Mode | bytes/vec | nDCG@10 | hit@10 | MRR@10 |
+|------|----------:|--------:|-------:|-------:|
+| FAISS dense exact | 4096 | 0.7817 | 0.8604 | 0.7566 |
+| ordinal rank-cosine | 4096 | 0.7796 | 0.8596 | 0.7542 |
+| FAISS HNSW | ~4352 | 0.7756 | 0.8528 | 0.7509 |
+| RankQuant b=2 asym | 256 | 0.7754 | 0.8536 | 0.7506 |
+
+Paired bootstrap over all 7,200 queries:
+
+- ordinal rank-cosine minus FAISS HNSW: `+0.00406 nDCG@10`, 95% CI
+  `[+0.00133, +0.00687]`
+- ordinal rank-cosine minus FAISS dense exact: `-0.00205 nDCG@10`, 95% CI
+  `[-0.00429, +0.00019]`
+- RankQuant b=2 asym minus FAISS HNSW: `-0.00014 nDCG@10`, 95% CI
+  `[-0.00318, +0.00292]`
+
+Read narrowly: on this real retrieval task, ordinal structure retains nearly all
+of the dense retrieval signal, and the 2-bit deployed path matches the tested
+FAISS HNSW configuration within bootstrap noise at 1/16 the FP32 vector payload.
+The arXiv artifact set is not shipped in this crate; the self-contained
+clean-checkout benchmark below is the reproducible stress test.
+
+### Synthetic stress test
 
 The head-to-head benchmark generates a seeded synthetic corpus in-process, so
 the **quality numbers (R@10, candidate-recall, bytes/vec) are deterministic**
@@ -194,8 +238,9 @@ A few operating points from the committed run
 *One representative run on a **synthetic** corpus (dim=256, n=30k, seed=1),
 AMD Ryzen 9 9950X (AVX-512), 32 threads, single-thread scan. **R@10 is
 deterministic** run-to-run; **throughput/latency vary** with hardware and run.
-R@10 is measured against FP32 brute-force cosine on this synthetic corpus —
-the broader real-corpus evaluation lives in the paper (in progress).*
+R@10 is measured against FP32 brute-force cosine on this generated corpus. Treat
+it as a small, self-contained kernel and stress-test fixture; the real-embedding
+retrieval task above is the better guide to retrieval-relevant behaviour.*
 
 ## Scope
 
@@ -209,8 +254,9 @@ replacing it. Encoding is training-free and data-oblivious by design —
 no codebook fit — so you index the first vector with no prior data and never
 refit as the corpus grows.
 
-Quality evidence in this repo is the reproducible synthetic benchmark above;
-the broader real-corpus evaluation is in the paper (in progress).
+Quality evidence now has two layers: the real-embedding retrieval table above
+for the paper claim, and the reproducible synthetic stress test for a
+clean-checkout kernel sanity check.
 
 ## Security: index-file trust
 
