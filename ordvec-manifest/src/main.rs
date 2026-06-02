@@ -206,6 +206,10 @@ fn run() -> Result<i32, ManifestError> {
                 println!("manifest_id: {}", document.manifest.manifest_id);
                 println!("schema_version: {}", document.manifest.schema_version);
                 println!("artifact: {}", document.manifest.artifact.path);
+                println!(
+                    "auxiliary_artifacts: {}",
+                    document.manifest.auxiliary_artifacts.len()
+                );
                 println!("row_identity: {}", row_identity_label(&document));
                 println!("calibration: {}", calibration_label(&document));
             }

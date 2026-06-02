@@ -1,7 +1,7 @@
 use crate::{
-    resolve_existing_path, sha256_file, sha256_file_bounded, validate_jsonl_rows, verify_manifest,
-    ManifestDocument, ManifestError, ReportIssue, ResourceLimits, RowIdentity, VerificationReport,
-    VerifyOptions,
+    resolve_existing_path, sha256_file, sha256_file_bounded, validate_jsonl_rows,
+    verify_auxiliary_artifacts, verify_manifest, AuxiliaryArtifactState, ManifestDocument,
+    ManifestError, ReportIssue, ResourceLimits, RowIdentity, VerificationReport, VerifyOptions,
 };
 use chrono::{SecondsFormat, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -114,6 +114,7 @@ fn init(conn: &Connection) -> Result<(), ManifestError> {
                 artifact_sha256 TEXT,
                 row_identity_sha256 TEXT,
                 calibration_profile_sha256 TEXT,
+                auxiliary_artifacts_sha256 TEXT,
                 report_json TEXT NOT NULL
              );
              INSERT INTO verification_reports(
@@ -137,6 +138,7 @@ fn init(conn: &Connection) -> Result<(), ManifestError> {
             artifact_sha256 TEXT,
             row_identity_sha256 TEXT,
             calibration_profile_sha256 TEXT,
+            auxiliary_artifacts_sha256 TEXT,
             report_json TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS verification_reports_cache_idx
@@ -147,6 +149,7 @@ fn init(conn: &Connection) -> Result<(), ManifestError> {
             artifact_sha256,
             row_identity_sha256,
             calibration_profile_sha256,
+            auxiliary_artifacts_sha256,
             report_id
           );
         CREATE TABLE IF NOT EXISTS active_manifest(
@@ -192,8 +195,9 @@ fn store_report(
             artifact_sha256,
             row_identity_sha256,
             calibration_profile_sha256,
+            auxiliary_artifacts_sha256,
             report_json
-         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+         ) VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             document.manifest.manifest_id,
             manifest_path.display().to_string(),
@@ -204,6 +208,7 @@ fn store_report(
             cache_key.map(|key| key.artifact_sha256.as_str()),
             cache_key.and_then(|key| key.row_identity_sha256.as_deref()),
             cache_key.and_then(|key| key.calibration_profile_sha256.as_deref()),
+            cache_key.and_then(|key| key.auxiliary_artifacts_sha256.as_deref()),
             report_json,
         ],
     )
@@ -234,6 +239,10 @@ fn load_cached_report(
                  (calibration_profile_sha256 IS NULL AND ?6 IS NULL)
                  OR calibration_profile_sha256 = ?6
                )
+               AND (
+                 (auxiliary_artifacts_sha256 IS NULL AND ?7 IS NULL)
+                 OR auxiliary_artifacts_sha256 = ?7
+               )
              ORDER BY report_id DESC
              LIMIT 1",
             params![
@@ -243,6 +252,7 @@ fn load_cached_report(
                 cache_key.artifact_sha256.as_str(),
                 cache_key.row_identity_sha256.as_deref(),
                 cache_key.calibration_profile_sha256.as_deref(),
+                cache_key.auxiliary_artifacts_sha256.as_deref(),
             ],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
@@ -280,6 +290,7 @@ struct CacheKey {
     artifact_sha256: String,
     row_identity_sha256: Option<String>,
     calibration_profile_sha256: Option<String>,
+    auxiliary_artifacts_sha256: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -379,6 +390,7 @@ fn current_cache_key(
         }
     };
     let calibration_profile_sha256 = current_calibration_profile_sha256(document, options)?;
+    let auxiliary_artifacts_sha256 = current_auxiliary_artifacts_sha256(document, options)?;
 
     Ok(Some(CacheKey {
         manifest_sha256,
@@ -386,6 +398,7 @@ fn current_cache_key(
         artifact_sha256,
         row_identity_sha256,
         calibration_profile_sha256,
+        auxiliary_artifacts_sha256,
     }))
 }
 
@@ -432,13 +445,88 @@ fn cache_key_from_report(
     } else {
         None
     };
+    let auxiliary_artifacts_sha256 = auxiliary_artifacts_sha256_from_report(document, report)?;
     Ok(Some(CacheKey {
         manifest_sha256,
         options_sha256,
         artifact_sha256,
         row_identity_sha256,
         calibration_profile_sha256,
+        auxiliary_artifacts_sha256,
     }))
+}
+
+fn current_auxiliary_artifacts_sha256(
+    document: &ManifestDocument,
+    options: &VerifyOptions,
+) -> Result<Option<String>, ManifestError> {
+    if document.manifest.auxiliary_artifacts.is_empty() {
+        return Ok(None);
+    }
+    let mut report = VerificationReport::new(None);
+    verify_auxiliary_artifacts(document, options, &mut report);
+    if !report.errors.is_empty() {
+        return Ok(None);
+    }
+    auxiliary_artifacts_sha256_from_report(document, &report)
+}
+
+fn auxiliary_artifacts_sha256_from_report(
+    document: &ManifestDocument,
+    report: &VerificationReport,
+) -> Result<Option<String>, ManifestError> {
+    if document.manifest.auxiliary_artifacts.is_empty() {
+        return Ok(None);
+    }
+    if report.auxiliary_artifacts.len() != document.manifest.auxiliary_artifacts.len() {
+        return Ok(None);
+    }
+
+    let mut entries = Vec::with_capacity(report.auxiliary_artifacts.len());
+    for entry in &report.auxiliary_artifacts {
+        match entry.state {
+            AuxiliaryArtifactState::Verified => {
+                let (Some(sha256), Some(size_bytes)) = (entry.sha256.as_ref(), entry.size_bytes)
+                else {
+                    return Ok(None);
+                };
+                entries.push(AuxiliaryArtifactCacheEntry {
+                    name: entry.name.clone(),
+                    path: entry.manifest_path.clone(),
+                    required: entry.required,
+                    state: "verified",
+                    sha256: Some(sha256.clone()),
+                    size_bytes: Some(size_bytes),
+                });
+            }
+            AuxiliaryArtifactState::OptionalAbsent => {
+                entries.push(AuxiliaryArtifactCacheEntry {
+                    name: entry.name.clone(),
+                    path: entry.manifest_path.clone(),
+                    required: entry.required,
+                    state: "optional_absent",
+                    sha256: None,
+                    size_bytes: None,
+                });
+            }
+            AuxiliaryArtifactState::MissingRequired | AuxiliaryArtifactState::Failed => {
+                return Ok(None);
+            }
+        }
+    }
+
+    let json = serde_json::to_vec(&entries)?;
+    Ok(Some(sha256_bytes(&json)))
+}
+
+#[derive(Serialize)]
+struct AuxiliaryArtifactCacheEntry {
+    name: String,
+    path: String,
+    required: bool,
+    state: &'static str,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
 }
 
 fn current_calibration_profile_sha256(
@@ -503,7 +591,10 @@ fn verification_reports_needs_migration(conn: &Connection) -> Result<bool, Manif
         || !columns.iter().any(|column| column == "manifest_sha256")
         || !columns
             .iter()
-            .any(|column| column == "calibration_profile_sha256"))
+            .any(|column| column == "calibration_profile_sha256")
+        || !columns
+            .iter()
+            .any(|column| column == "auxiliary_artifacts_sha256"))
 }
 
 fn sqlite_err(err: rusqlite::Error) -> ManifestError {

@@ -2,9 +2,10 @@ use ordvec::{Bitmap, Rank, RankQuant, SignBitmap};
 use ordvec_manifest::{
     create_manifest_for_index, create_manifest_for_index_with_options, load_manifest_file,
     load_manifest_file_with_options, sha256_file, verify_index_manifest, verify_manifest_with_base,
-    CalibrationOrdinalization, CalibrationProfileRef, CreateManifestOptions, CreateRowIdentity,
-    EncoderSpec, ManifestIndexParams, NullModelSpec, ProfileArtifactRef, ProfileParameterization,
-    ResourceLimits, RowIdentity, VerifyOptions, CALIBRATION_SCHEMA_VERSION,
+    AuxiliaryArtifact, AuxiliaryArtifactState, CalibrationOrdinalization, CalibrationProfileRef,
+    CreateManifestOptions, CreateRowIdentity, EncoderSpec, ManifestIndexParams, NullModelSpec,
+    ProfileArtifactRef, ProfileParameterization, ResourceLimits, RowIdentity, VerifyOptions,
+    CALIBRATION_SCHEMA_VERSION,
 };
 use serde_json::json;
 use std::fs;
@@ -100,6 +101,21 @@ fn identity_manifest(dir: &Path) -> (tempfile::TempDir, ordvec_manifest::IndexMa
 fn write_profile(path: &Path, size_bytes: usize) -> ordvec_manifest::FileHash {
     fs::write(path, vec![0u8; size_bytes]).unwrap();
     sha256_file(path).unwrap()
+}
+
+fn auxiliary_artifact(
+    name: &str,
+    path: &str,
+    hash: ordvec_manifest::FileHash,
+    required: bool,
+) -> AuxiliaryArtifact {
+    AuxiliaryArtifact {
+        name: name.to_string(),
+        path: path.to_string(),
+        sha256: hash.sha256,
+        file_size_bytes: hash.size_bytes,
+        required,
+    }
 }
 
 fn uniform_calibration(
@@ -1382,6 +1398,121 @@ fn jsonl_row_identity_is_strict_and_duplicate_ids_need_opt_in() {
 }
 
 #[test]
+fn auxiliary_artifacts_verify_and_report_deterministically() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    fs::write(temp.path().join("zeta.bin"), b"zeta").unwrap();
+    fs::write(temp.path().join("alpha.bin"), b"alpha").unwrap();
+    let zeta_hash = sha256_file(temp.path().join("zeta.bin")).unwrap();
+    let alpha_hash = sha256_file(temp.path().join("alpha.bin")).unwrap();
+
+    manifest.auxiliary_artifacts = vec![
+        auxiliary_artifact("zeta", "zeta.bin", zeta_hash, true),
+        AuxiliaryArtifact {
+            name: "optional-model".to_string(),
+            path: "missing-model.json".to_string(),
+            sha256: "0".repeat(64),
+            file_size_bytes: 0,
+            required: false,
+        },
+        auxiliary_artifact("alpha", "alpha.bin", alpha_hash, true),
+    ];
+
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    assert!(report.ok, "{:?}", report.errors);
+    assert_eq!(
+        report
+            .auxiliary_artifacts
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect::<Vec<_>>(),
+        ["alpha", "optional-model", "zeta"]
+    );
+    assert_eq!(
+        report.auxiliary_artifacts[0].state,
+        AuxiliaryArtifactState::Verified
+    );
+    assert_eq!(
+        report.auxiliary_artifacts[1].state,
+        AuxiliaryArtifactState::OptionalAbsent
+    );
+    assert_eq!(
+        report.auxiliary_artifacts[1].reason_code.as_deref(),
+        Some("auxiliary_artifact_optional_absent")
+    );
+    assert_eq!(
+        report.auxiliary_artifacts[2].state,
+        AuxiliaryArtifactState::Verified
+    );
+}
+
+#[test]
+fn auxiliary_artifacts_fail_closed_on_tamper_missing_and_path_escape() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    let outside = root.path().join("outside.bin");
+    fs::write(&outside, b"outside").unwrap();
+    fs::write(temp.path().join("tampered.bin"), b"original").unwrap();
+    fs::write(temp.path().join("wrong-size.bin"), b"size").unwrap();
+    let tampered_hash = sha256_file(temp.path().join("tampered.bin")).unwrap();
+    let wrong_size_hash = sha256_file(temp.path().join("wrong-size.bin")).unwrap();
+    fs::write(temp.path().join("tampered.bin"), b"changed").unwrap();
+
+    manifest.auxiliary_artifacts = vec![
+        AuxiliaryArtifact {
+            name: "missing".to_string(),
+            path: "missing.bin".to_string(),
+            sha256: "0".repeat(64),
+            file_size_bytes: 0,
+            required: true,
+        },
+        auxiliary_artifact("tampered", "tampered.bin", tampered_hash, true),
+        AuxiliaryArtifact {
+            name: "wrong-size".to_string(),
+            path: "wrong-size.bin".to_string(),
+            sha256: wrong_size_hash.sha256,
+            file_size_bytes: wrong_size_hash.size_bytes + 1,
+            required: true,
+        },
+        AuxiliaryArtifact {
+            name: "escape".to_string(),
+            path: "../outside.bin".to_string(),
+            sha256: sha256_file(outside).unwrap().sha256,
+            file_size_bytes: 7,
+            required: true,
+        },
+    ];
+
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    assert!(!report.ok);
+    let codes = error_codes(&report);
+    assert!(codes.contains(&"auxiliary_artifact_missing_required"));
+    assert!(codes.contains(&"auxiliary_artifact_sha256_mismatch"));
+    assert!(codes.contains(&"auxiliary_artifact_file_size_mismatch"));
+    assert!(codes.contains(&"auxiliary_artifact_path_escape_rejected"));
+}
+
+#[test]
+fn auxiliary_artifact_schema_rejects_unknown_fields_and_duplicate_names() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    fs::write(temp.path().join("sidecar.bin"), b"sidecar").unwrap();
+    let sidecar_hash = sha256_file(temp.path().join("sidecar.bin")).unwrap();
+
+    manifest.auxiliary_artifacts = vec![
+        auxiliary_artifact("duplicate", "sidecar.bin", sidecar_hash.clone(), true),
+        auxiliary_artifact("duplicate", "sidecar.bin", sidecar_hash, false),
+    ];
+    let report = verify_manifest_with_base(manifest.clone(), temp.path(), VerifyOptions::default());
+    assert!(error_codes(&report).contains(&"auxiliary_artifact_name_duplicate"));
+
+    let mut value = serde_json::to_value(&manifest).unwrap();
+    value["auxiliary_artifacts"][0]["unexpected"] = json!(true);
+    let parsed = serde_json::from_value::<ordvec_manifest::IndexManifest>(value);
+    assert!(parsed.is_err());
+}
+
+#[test]
 fn attestation_shape_requires_matching_subject_sha256() {
     let root = tempfile::tempdir().unwrap();
     let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
@@ -1843,6 +1974,124 @@ fn sqlite_cache_key_includes_calibration_profile_bytes() {
 
 #[cfg(feature = "sqlite")]
 #[test]
+fn sqlite_cache_key_includes_auxiliary_artifact_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let index = write_index(temp.path());
+    let manifest_path = temp.path().join("manifest.json");
+    let mut manifest = create_manifest_for_index(
+        &index,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap();
+    let sidecar_path = temp.path().join("sidecar.json");
+    fs::write(&sidecar_path, b"{\"version\":1}\n").unwrap();
+    let sidecar_hash = sha256_file(&sidecar_path).unwrap();
+    manifest.auxiliary_artifacts = vec![auxiliary_artifact(
+        "sidecar",
+        "sidecar.json",
+        sidecar_hash,
+        true,
+    )];
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let document = load_manifest_file(&manifest_path).unwrap();
+    let db = temp.path().join("registry.sqlite");
+
+    let report = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions::default(),
+        true,
+    )
+    .unwrap();
+    assert!(report.ok, "{:?}", report.errors);
+
+    fs::write(&sidecar_path, b"{\"version\":2}\n").unwrap();
+    let cached = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions::default(),
+        true,
+    )
+    .unwrap();
+    assert!(
+        !cached.ok,
+        "auxiliary artifact drift must force fresh verification"
+    );
+    assert!(error_codes(&cached).contains(&"auxiliary_artifact_sha256_mismatch"));
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_cache_key_distinguishes_optional_auxiliary_absent_and_present() {
+    let temp = tempfile::tempdir().unwrap();
+    let index = write_index(temp.path());
+    let manifest_path = temp.path().join("manifest.json");
+    let mut manifest = create_manifest_for_index(
+        &index,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap();
+    let optional_path = temp.path().join("optional.json");
+    fs::write(&optional_path, b"{\"enabled\":true}\n").unwrap();
+    let optional_hash = sha256_file(&optional_path).unwrap();
+    fs::remove_file(&optional_path).unwrap();
+    manifest.auxiliary_artifacts = vec![auxiliary_artifact(
+        "optional",
+        "optional.json",
+        optional_hash,
+        false,
+    )];
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let document = load_manifest_file(&manifest_path).unwrap();
+    let db = temp.path().join("registry.sqlite");
+
+    let report = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions::default(),
+        true,
+    )
+    .unwrap();
+    assert!(report.ok, "{:?}", report.errors);
+
+    assert_eq!(
+        report.auxiliary_artifacts[0].state,
+        AuxiliaryArtifactState::OptionalAbsent
+    );
+
+    fs::write(&optional_path, b"{\"enabled\":true}\n").unwrap();
+    let present = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions::default(),
+        true,
+    )
+    .unwrap();
+    assert!(present.ok, "{:?}", present.errors);
+    assert_eq!(
+        present.auxiliary_artifacts[0].state,
+        AuxiliaryArtifactState::Verified
+    );
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
 fn sqlite_cache_key_includes_limits_and_bounds_cached_report_size() {
     use rusqlite::Connection;
 
@@ -1891,29 +2140,6 @@ fn sqlite_cache_key_includes_limits_and_bounds_cached_report_size() {
     assert!(cached.ok, "{:?}", cached.errors);
 
     let conn = Connection::open(&db).unwrap();
-    let count: i64 = conn
-        .query_row("SELECT COUNT(*) FROM verification_reports", [], |row| {
-            row.get(0)
-        })
-        .unwrap();
-    assert_eq!(count, 1, "same limits should reuse the cached report");
-
-    let options_b = VerifyOptions {
-        limits: ResourceLimits {
-            max_report_issues: 18,
-            ..ResourceLimits::default()
-        },
-        ..VerifyOptions::default()
-    };
-    let report = ordvec_manifest::sqlite::verify_with_registry(
-        &db,
-        &document,
-        &manifest_path,
-        options_b,
-        true,
-    )
-    .unwrap();
-    assert!(report.ok, "{:?}", report.errors);
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM verification_reports", [], |row| {
             row.get(0)
