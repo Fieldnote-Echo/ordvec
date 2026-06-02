@@ -29,6 +29,55 @@ fn tmp(name: &str) -> std::path::PathBuf {
     ))
 }
 
+fn assert_load_err_contains<T>(result: std::io::Result<T>, expected: &str) {
+    let Err(err) = result else {
+        panic!("expected error containing {expected:?}, got Ok(_)");
+    };
+    let text = err.to_string();
+    assert!(
+        text.contains(expected),
+        "expected error containing {expected:?}, got {text:?}"
+    );
+}
+
+fn rank_header(dim: u32, n_vectors: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(b"TVR1");
+    v.push(1);
+    v.extend_from_slice(&dim.to_le_bytes());
+    v.extend_from_slice(&n_vectors.to_le_bytes());
+    v
+}
+
+fn rankquant_header(bits: u8, dim: u32, n_vectors: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(b"TVRQ");
+    v.push(1);
+    v.push(bits);
+    v.extend_from_slice(&dim.to_le_bytes());
+    v.extend_from_slice(&n_vectors.to_le_bytes());
+    v
+}
+
+fn bitmap_header(dim: u32, n_top: u32, n_vectors: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(b"TVBM");
+    v.push(1);
+    v.extend_from_slice(&dim.to_le_bytes());
+    v.extend_from_slice(&n_top.to_le_bytes());
+    v.extend_from_slice(&n_vectors.to_le_bytes());
+    v
+}
+
+fn sign_bitmap_header(dim: u32, n_vectors: u32) -> Vec<u8> {
+    let mut v = Vec::new();
+    v.extend_from_slice(b"TVSB");
+    v.push(1);
+    v.extend_from_slice(&dim.to_le_bytes());
+    v.extend_from_slice(&n_vectors.to_le_bytes());
+    v
+}
+
 #[test]
 fn load_rank_rejects_non_permutation_row() {
     let corpus = make_corpus(1);
@@ -140,6 +189,80 @@ fn load_sign_bitmap_accepts_any_bit_pattern() {
         N,
         "sign bitmap doc count preserved after edit"
     );
+}
+
+#[test]
+fn public_loaders_report_stable_malformed_payload_context() {
+    let cases: [(&str, Vec<u8>, Vec<u8>, &str); 4] = [
+        ("rank", rank_header(4, 1), rank_header(4, 0), "TVR1"),
+        (
+            "rankquant",
+            rankquant_header(2, 8, 1),
+            rankquant_header(2, 8, 0),
+            "TVRQ",
+        ),
+        (
+            "bitmap",
+            bitmap_header(64, 16, 1),
+            bitmap_header(64, 16, 0),
+            "TVBM",
+        ),
+        (
+            "sign_bitmap",
+            sign_bitmap_header(64, 1),
+            sign_bitmap_header(64, 0),
+            "TVSB",
+        ),
+    ];
+
+    for (suffix, truncated_header, mut trailing_bytes, label) in cases {
+        let truncated = tmp(&format!("{suffix}_truncated_context"));
+        write_bytes(&truncated, &truncated_header);
+        match label {
+            "TVR1" => assert_load_err_contains(
+                Rank::load(&truncated),
+                &format!("{label} payload truncated"),
+            ),
+            "TVRQ" => assert_load_err_contains(
+                RankQuant::load(&truncated),
+                &format!("{label} payload truncated"),
+            ),
+            "TVBM" => assert_load_err_contains(
+                Bitmap::load(&truncated),
+                &format!("{label} payload truncated"),
+            ),
+            "TVSB" => assert_load_err_contains(
+                SignBitmap::load(&truncated),
+                &format!("{label} payload truncated"),
+            ),
+            _ => unreachable!(),
+        }
+        std::fs::remove_file(&truncated).ok();
+
+        trailing_bytes.push(0);
+        let trailing = tmp(&format!("{suffix}_trailing_context"));
+        write_bytes(&trailing, &trailing_bytes);
+        match label {
+            "TVR1" => assert_load_err_contains(
+                Rank::load(&trailing),
+                &format!("{label} payload has trailing bytes"),
+            ),
+            "TVRQ" => assert_load_err_contains(
+                RankQuant::load(&trailing),
+                &format!("{label} payload has trailing bytes"),
+            ),
+            "TVBM" => assert_load_err_contains(
+                Bitmap::load(&trailing),
+                &format!("{label} payload has trailing bytes"),
+            ),
+            "TVSB" => assert_load_err_contains(
+                SignBitmap::load(&trailing),
+                &format!("{label} payload has trailing bytes"),
+            ),
+            _ => unreachable!(),
+        }
+        std::fs::remove_file(&trailing).ok();
+    }
 }
 
 #[test]
