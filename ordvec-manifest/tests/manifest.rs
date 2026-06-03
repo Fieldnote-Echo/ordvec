@@ -2100,6 +2100,18 @@ fn verification_report_deserializes_missing_auxiliary_artifacts_field() {
 }
 
 #[test]
+fn verification_report_deserializes_missing_encoder_distortion_field() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, manifest, _manifest_path) = identity_manifest(root.path());
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    let mut value = serde_json::to_value(&report).unwrap();
+    value.as_object_mut().unwrap().remove("encoder_distortion");
+
+    let parsed: ordvec_manifest::VerificationReport = serde_json::from_value(value).unwrap();
+    assert!(!parsed.encoder_distortion.present);
+}
+
+#[test]
 fn attestation_shape_requires_matching_subject_sha256() {
     let root = tempfile::tempdir().unwrap();
     let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());

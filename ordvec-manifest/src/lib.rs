@@ -2687,6 +2687,7 @@ pub struct VerificationReport {
     #[serde(default)]
     pub auxiliary_artifacts: Vec<AuxiliaryArtifactReport>,
     pub row_identity: RowIdentityReport,
+    #[serde(default)]
     pub encoder_distortion: EncoderDistortionReport,
     pub calibration: CalibrationReport,
     pub attestation_shape_checks: Vec<AttestationShapeCheck>,
