@@ -176,6 +176,23 @@ pub fn verify_index_manifest(
     Ok(verify_manifest(&document, options))
 }
 
+pub fn verify_for_load(
+    manifest_path: impl AsRef<Path>,
+    options: VerifyOptions,
+) -> Result<VerifiedLoadPlan, VerifiedLoadPlanError> {
+    let document = load_manifest_file_with_options(manifest_path, &options)?;
+    verify_document_for_load(&document, options)
+}
+
+fn verify_document_for_load(
+    document: &ManifestDocument,
+    options: VerifyOptions,
+) -> Result<VerifiedLoadPlan, VerifiedLoadPlanError> {
+    let plan_options = options.clone();
+    let report = verify_manifest(document, options);
+    VerifiedLoadPlan::from_report(document, &plan_options, report)
+}
+
 pub fn verify_manifest(document: &ManifestDocument, options: VerifyOptions) -> VerificationReport {
     let mut report = VerificationReport::new(Some(document.manifest.manifest_id.clone()));
     validate_manifest_shape(&document.manifest, &options.limits, &mut report);
@@ -2675,6 +2692,324 @@ impl ManifestIndexParams {
             CoreIndexParams::Bitmap { n_top } => Self::Bitmap { n_top },
             CoreIndexParams::SignBitmap => Self::SignBitmap,
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifiedLoadPlan {
+    manifest_path: Option<PathBuf>,
+    artifact_path: PathBuf,
+    metadata: MetadataReport,
+    row_identity: VerifiedRowIdentityPlan,
+    auxiliary_artifacts: Vec<VerifiedAuxiliaryArtifactPlan>,
+    report: VerificationReport,
+}
+
+impl VerifiedLoadPlan {
+    fn from_report(
+        document: &ManifestDocument,
+        options: &VerifyOptions,
+        report: VerificationReport,
+    ) -> Result<Self, VerifiedLoadPlanError> {
+        if !report.ok {
+            return Err(VerifiedLoadPlanError::VerificationFailed(Box::new(report)));
+        }
+
+        let artifact_source_path = options
+            .index_override
+            .as_deref()
+            .unwrap_or_else(|| Path::new(&document.manifest.artifact.path));
+        let artifact_path = resolve_load_plan_path(
+            document,
+            options,
+            &report,
+            artifact_source_path,
+            "artifact",
+            "verified artifact path could not be resolved for load planning",
+        )?;
+        let metadata = report.artifact.metadata.clone().ok_or_else(|| {
+            VerifiedLoadPlanError::IncompletePlan {
+                report: Box::new(report.clone()),
+                message: "verified report is missing probed artifact metadata".to_string(),
+            }
+        })?;
+        let row_identity = VerifiedRowIdentityPlan::from_report(document, options, &report)?;
+        let auxiliary_artifacts = report
+            .auxiliary_artifacts
+            .iter()
+            .map(|entry| {
+                VerifiedAuxiliaryArtifactPlan::from_report(entry, document, options, &report)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+
+        Ok(Self {
+            manifest_path: document.source_path.clone(),
+            artifact_path,
+            metadata,
+            row_identity,
+            auxiliary_artifacts,
+            report,
+        })
+    }
+
+    pub fn manifest_path(&self) -> Option<&Path> {
+        self.manifest_path.as_deref()
+    }
+
+    pub fn artifact_path(&self) -> &Path {
+        &self.artifact_path
+    }
+
+    pub fn metadata(&self) -> &MetadataReport {
+        &self.metadata
+    }
+
+    pub fn row_identity(&self) -> &VerifiedRowIdentityPlan {
+        &self.row_identity
+    }
+
+    pub fn auxiliary_artifacts(&self) -> &[VerifiedAuxiliaryArtifactPlan] {
+        &self.auxiliary_artifacts
+    }
+
+    pub fn report(&self) -> &VerificationReport {
+        &self.report
+    }
+
+    pub fn into_report(self) -> VerificationReport {
+        self.report
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifiedRowIdentityPlan {
+    kind: String,
+    path: Option<PathBuf>,
+    row_count: usize,
+    validated_rows: Option<usize>,
+    sha256: Option<String>,
+}
+
+impl VerifiedRowIdentityPlan {
+    fn from_report(
+        document: &ManifestDocument,
+        options: &VerifyOptions,
+        report: &VerificationReport,
+    ) -> Result<Self, VerifiedLoadPlanError> {
+        let kind = report.row_identity.kind.clone().ok_or_else(|| {
+            VerifiedLoadPlanError::IncompletePlan {
+                report: Box::new(report.clone()),
+                message: "verified report is missing row identity kind".to_string(),
+            }
+        })?;
+        let row_count =
+            report
+                .row_identity
+                .row_count
+                .ok_or_else(|| VerifiedLoadPlanError::IncompletePlan {
+                    report: Box::new(report.clone()),
+                    message: "verified report is missing row identity row count".to_string(),
+                })?;
+        let path = match &document.manifest.row_identity {
+            RowIdentity::RowIdIdentity { .. } => None,
+            RowIdentity::Jsonl { path, .. } => Some(resolve_load_plan_path(
+                document,
+                options,
+                report,
+                Path::new(path),
+                "row_identity",
+                "verified row identity path could not be resolved for load planning",
+            )?),
+        };
+
+        Ok(Self {
+            kind,
+            path,
+            row_count,
+            validated_rows: report.row_identity.validated_rows,
+            sha256: report.row_identity.sha256.clone(),
+        })
+    }
+
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn row_count(&self) -> usize {
+        self.row_count
+    }
+
+    pub fn validated_rows(&self) -> Option<usize> {
+        self.validated_rows
+    }
+
+    pub fn sha256(&self) -> Option<&str> {
+        self.sha256.as_deref()
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct VerifiedAuxiliaryArtifactPlan {
+    name: String,
+    path: Option<PathBuf>,
+    required: bool,
+    state: AuxiliaryArtifactState,
+    reason_code: Option<String>,
+    sha256: Option<String>,
+    size_bytes: Option<u64>,
+}
+
+impl VerifiedAuxiliaryArtifactPlan {
+    fn from_report(
+        entry: &AuxiliaryArtifactReport,
+        document: &ManifestDocument,
+        options: &VerifyOptions,
+        report: &VerificationReport,
+    ) -> Result<Self, VerifiedLoadPlanError> {
+        let path = match entry.state {
+            AuxiliaryArtifactState::Verified => Some(resolve_load_plan_path(
+                document,
+                options,
+                report,
+                Path::new(&entry.manifest_path),
+                "auxiliary_artifact",
+                "verified auxiliary artifact path could not be resolved for load planning",
+            )?),
+            AuxiliaryArtifactState::OptionalAbsent => None,
+            AuxiliaryArtifactState::MissingRequired | AuxiliaryArtifactState::Failed => {
+                return Err(VerifiedLoadPlanError::IncompletePlan {
+                    report: Box::new(report.clone()),
+                    message: format!(
+                        "verified report contains non-loadable auxiliary artifact {:?}",
+                        entry.name
+                    ),
+                });
+            }
+        };
+
+        Ok(Self {
+            name: entry.name.clone(),
+            path,
+            required: entry.required,
+            state: entry.state,
+            reason_code: entry.reason_code.clone(),
+            sha256: entry.sha256.clone(),
+            size_bytes: entry.size_bytes,
+        })
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    pub fn required(&self) -> bool {
+        self.required
+    }
+
+    pub fn state(&self) -> AuxiliaryArtifactState {
+        self.state
+    }
+
+    pub fn reason_code(&self) -> Option<&str> {
+        self.reason_code.as_deref()
+    }
+
+    pub fn sha256(&self) -> Option<&str> {
+        self.sha256.as_deref()
+    }
+
+    pub fn size_bytes(&self) -> Option<u64> {
+        self.size_bytes
+    }
+}
+
+#[derive(Debug)]
+pub enum VerifiedLoadPlanError {
+    Manifest(ManifestError),
+    VerificationFailed(Box<VerificationReport>),
+    IncompletePlan {
+        report: Box<VerificationReport>,
+        message: String,
+    },
+}
+
+impl fmt::Display for VerifiedLoadPlanError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Manifest(err) => write!(f, "{err}"),
+            Self::VerificationFailed(report) => {
+                write!(
+                    f,
+                    "manifest verification failed{}",
+                    report_issue_summary(&report.errors)
+                )
+            }
+            Self::IncompletePlan { message, .. } => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for VerifiedLoadPlanError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Manifest(err) => Some(err),
+            Self::VerificationFailed(_) | Self::IncompletePlan { .. } => None,
+        }
+    }
+}
+
+impl From<ManifestError> for VerifiedLoadPlanError {
+    fn from(value: ManifestError) -> Self {
+        Self::Manifest(value)
+    }
+}
+
+fn resolve_load_plan_path(
+    document: &ManifestDocument,
+    options: &VerifyOptions,
+    report: &VerificationReport,
+    path: &Path,
+    context: &str,
+    message: &'static str,
+) -> Result<PathBuf, VerifiedLoadPlanError> {
+    let mut errors = Vec::new();
+    resolve_existing_path(path, &document.base_dir, options, context, &mut errors)
+        .map(|resolved| resolved.canonical_path)
+        .ok_or_else(|| VerifiedLoadPlanError::IncompletePlan {
+            report: Box::new(report.clone()),
+            message: plan_resolution_message(message, &errors),
+        })
+}
+
+fn plan_resolution_message(message: &str, errors: &[ReportIssue]) -> String {
+    if errors.is_empty() {
+        return message.to_string();
+    }
+    format!("{message}{}", report_issue_summary(errors))
+}
+
+fn report_issue_summary(errors: &[ReportIssue]) -> String {
+    if errors.is_empty() {
+        return String::new();
+    }
+    let codes = errors
+        .iter()
+        .take(3)
+        .map(|issue| issue.code.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if errors.len() > 3 {
+        format!(": {codes}, ...")
+    } else {
+        format!(": {codes}")
     }
 }
 
