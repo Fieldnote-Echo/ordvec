@@ -118,13 +118,10 @@ fuzz_target!(|input: TwoStageInput| {
         let full = rankquant.search_asymmetric(query, input.k);
         let (subset_scores, subset_ids) =
             rankquant.search_asymmetric_subset(query, &candidates, input.k);
-        assert_eq!(subset_ids.len(), full.indices_for_query(0).len());
-        assert_eq!(subset_scores.len(), full.scores_for_query(0).len());
-        let mut subset_scores_sorted = subset_scores;
-        let mut full_scores_sorted = full.scores_for_query(0).to_vec();
-        subset_scores_sorted.sort_by(|left, right| left.total_cmp(right));
-        full_scores_sorted.sort_by(|left, right| left.total_cmp(right));
-        for (subset, full) in subset_scores_sorted.iter().zip(&full_scores_sorted) {
+        assert_eq!(subset_ids, full.indices_for_query(0));
+        let full_scores = full.scores_for_query(0);
+        assert_eq!(subset_scores.len(), full_scores.len());
+        for (subset, full) in subset_scores.iter().zip(full_scores) {
             assert!((subset - full).abs() <= 1e-6);
         }
     }
