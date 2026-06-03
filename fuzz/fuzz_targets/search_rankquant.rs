@@ -1,50 +1,156 @@
-//! libFuzzer target for the RankQuant ingest + asymmetric-search hot path:
-//! `add` (rank_transform -> pack) then `search_asymmetric` (the runtime-
-//! dispatched scalar / AVX2 / AVX-512 scan kernels -> TopK). The four `load_*`
-//! targets cover deserialization; this exercises the *compute* surface they
-//! feed, through the public API (the SIMD kernels themselves are `pub(crate)`).
+//! libFuzzer target for the RankQuant ingest + search hot paths:
+//! `add` (rank_transform -> bucket -> pack), then both symmetric `search` and
+//! asymmetric `search_asymmetric` (runtime-dispatched scalar / AVX2 / AVX-512
+//! scan kernels -> TopK). The `load_*` targets cover deserialization; this
+//! exercises the compute surface they feed, through the public API.
 //!
-//! `dim` is fixed at 64 — divisible by `8 / bits` and `2^bits` for every
-//! bits in {1,2,4} and by the AVX-512 64-code unroll — so `RankQuant::new` is
-//! infallible and the highest SIMD tier the host supports is reached. The
-//! fuzzer shapes the doc count, the embedding/query values, and `k` (k == 0
-//! included — the empty-`TopK` edge). Embedding values are mapped to finite
-//! f32: the public API rejects NaN / ±Inf by contract, so raw float bit
-//! patterns would only re-exercise that guard, not the kernels.
-//!
-//! Contract: no panic, abort, or out-of-bounds access on any input.
+//! The fuzzer varies valid `(dim, bits)`, document count, query count, tie-heavy
+//! finite vector values, and `k` shapes including zero, one, `n`, `n + 1`, and a
+//! huge value. Invalid dimensions, non-finite floats, and ragged vector lengths
+//! are caller contract violations, so this target avoids them and treats any
+//! panic as a compute-path bug. Assertions stay structural: shape, finite
+//! scores, valid doc IDs, score-descending rows, and repeat determinism in one
+//! process.
 #![no_main]
 
-use libfuzzer_sys::fuzz_target;
-use ordvec::RankQuant;
+use libfuzzer_sys::{
+    arbitrary::{Arbitrary, Error, Unstructured},
+    fuzz_target,
+};
+use ordvec::{RankQuant, SearchResults};
 
-fuzz_target!(|data: &[u8]| {
-    if data.len() < 3 {
-        return;
+const DIMS_B1: &[usize] = &[8, 16, 32, 48, 64, 80, 128];
+const DIMS_B2: &[usize] = &[8, 16, 20, 32, 36, 48, 64, 80, 128];
+const DIMS_B4: &[usize] = &[16, 32, 48, 64, 80, 128];
+
+#[derive(Debug)]
+struct HotPathCase {
+    bits: u8,
+    dim: usize,
+    n: usize,
+    nq: usize,
+    k: usize,
+    value_mode: u8,
+    payload: Vec<u8>,
+}
+
+impl<'a> Arbitrary<'a> for HotPathCase {
+    fn arbitrary(raw: &mut Unstructured<'a>) -> Result<Self, Error> {
+        let bits = *raw.choose(&[1u8, 2, 4])?;
+        let dim = match bits {
+            1 => *raw.choose(DIMS_B1)?,
+            2 => *raw.choose(DIMS_B2)?,
+            4 => *raw.choose(DIMS_B4)?,
+            _ => unreachable!(),
+        };
+        let n: usize = raw.int_in_range(0..=32)?;
+        let nq: usize = raw.int_in_range(0..=4)?;
+        let k_seed: usize = raw.int_in_range(0..=64)?;
+        let k_mode: u8 = raw.int_in_range(0..=5)?;
+        let k = match k_mode {
+            0 => 0,
+            1 => 1,
+            2 => n,
+            3 => n.saturating_add(1),
+            4 => usize::MAX,
+            _ => k_seed,
+        };
+        let value_mode: u8 = raw.int_in_range(0..=3)?;
+        let payload = raw.bytes(raw.len())?.to_vec();
+
+        Ok(Self {
+            bits,
+            dim,
+            n,
+            nq,
+            k,
+            value_mode,
+            payload,
+        })
     }
-    const DIM: usize = 64;
-    let bits: u8 = match data[0] % 3 {
-        0 => 1,
-        1 => 2,
-        _ => 4,
-    };
-    let n = (data[1] as usize % 16) + 1; // 1..=16 docs
-    let k = data[2] as usize % (n + 1); // 0..=n
+}
 
-    let payload = &data[3..];
-    let total = (n + 1) * DIM;
-    let floats: Vec<f32> = (0..total)
+fn finite_values(case: &HotPathCase, total: usize) -> Vec<f32> {
+    (0..total)
         .map(|i| {
-            if payload.is_empty() {
-                0.0
-            } else {
-                payload[i % payload.len()] as f32 - 128.0
+            let byte = case.payload.get(i % case.payload.len().max(1)).copied().unwrap_or(0);
+            match case.value_mode {
+                0 => 0.0,
+                1 => (byte % 5) as f32 - 2.0,
+                2 => byte as f32 - 128.0,
+                _ => (byte as f32 - 128.0) / 16.0,
             }
         })
-        .collect();
-    let (vecs, query) = floats.split_at(n * DIM);
+        .collect()
+}
 
-    let mut idx = RankQuant::new(DIM, bits);
-    idx.add(vecs);
-    let _ = idx.search_asymmetric(query, k);
+fn assert_results(label: &str, res: &SearchResults, nq: usize, k_eff: usize, n: usize) {
+    assert_eq!(res.nq, nq, "{label}: wrong query count");
+    assert_eq!(res.k, k_eff, "{label}: wrong effective k");
+    assert_eq!(res.scores.len(), nq * k_eff, "{label}: wrong score length");
+    assert_eq!(res.indices.len(), nq * k_eff, "{label}: wrong id length");
+
+    for qi in 0..nq {
+        let scores = res.scores_for_query(qi);
+        let ids = res.indices_for_query(qi);
+        for slot in 0..k_eff {
+            let score = scores[slot];
+            let id = ids[slot];
+            assert!(score.is_finite(), "{label}: non-finite score at query {qi} slot {slot}");
+            assert!(id >= 0, "{label}: negative doc id at query {qi} slot {slot}");
+            assert!(
+                (id as usize) < n,
+                "{label}: doc id {id} out of range for n={n} at query {qi} slot {slot}",
+            );
+        }
+        for slot in 1..k_eff {
+            let prev = (scores[slot - 1], ids[slot - 1]);
+            let cur = (scores[slot], ids[slot]);
+            assert!(
+                cur.0 <= prev.0,
+                "{label}: row {qi} not sorted at slots {} and {slot}",
+                slot - 1,
+            );
+        }
+    }
+}
+
+fuzz_target!(|case: HotPathCase| {
+    let total = (case.n + case.nq) * case.dim;
+    let floats = finite_values(&case, total);
+    let (docs, queries) = floats.split_at(case.n * case.dim);
+
+    let mut idx = RankQuant::new(case.dim, case.bits);
+    idx.add(docs);
+
+    assert_eq!(idx.len(), case.n);
+    assert_eq!(idx.dim(), case.dim);
+    assert_eq!(idx.bits(), case.bits);
+    assert_eq!(idx.byte_size(), case.n * idx.bytes_per_vec());
+
+    let k_eff = case.k.min(case.n);
+
+    let symmetric = idx.search(queries, case.k);
+    assert_results("search", &symmetric, case.nq, k_eff, case.n);
+    let symmetric_again = idx.search(queries, case.k);
+    assert_eq!(
+        symmetric.indices, symmetric_again.indices,
+        "search returned nondeterministic ids",
+    );
+    assert_eq!(
+        symmetric.scores, symmetric_again.scores,
+        "search returned nondeterministic scores",
+    );
+
+    let asymmetric = idx.search_asymmetric(queries, case.k);
+    assert_results("search_asymmetric", &asymmetric, case.nq, k_eff, case.n);
+    let asymmetric_again = idx.search_asymmetric(queries, case.k);
+    assert_eq!(
+        asymmetric.indices, asymmetric_again.indices,
+        "search_asymmetric returned nondeterministic ids",
+    );
+    assert_eq!(
+        asymmetric.scores, asymmetric_again.scores,
+        "search_asymmetric returned nondeterministic scores",
+    );
 });
