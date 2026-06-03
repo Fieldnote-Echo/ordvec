@@ -1541,6 +1541,56 @@ fn auxiliary_artifact_count_limit_is_enforced_before_verification() {
 }
 
 #[test]
+fn auxiliary_artifact_byte_limit_is_enforced_before_hashing() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    let sidecar = temp.path().join("sidecar.bin");
+    fs::write(&sidecar, b"sidecar").unwrap();
+    let sidecar_hash = sha256_file(&sidecar).unwrap();
+    manifest.auxiliary_artifacts = vec![auxiliary_artifact(
+        "sidecar",
+        "sidecar.bin",
+        sidecar_hash.clone(),
+        true,
+    )];
+
+    let report = verify_manifest_with_base(
+        manifest.clone(),
+        temp.path(),
+        VerifyOptions {
+            limits: ResourceLimits {
+                max_auxiliary_artifact_bytes: sidecar_hash.size_bytes - 1,
+                ..ResourceLimits::default()
+            },
+            ..VerifyOptions::default()
+        },
+    );
+    assert!(error_codes(&report).contains(&"auxiliary_artifact_file_too_large"));
+    assert_eq!(report.auxiliary_artifacts[0].sha256, None);
+    assert_eq!(
+        report.auxiliary_artifacts[0].reason_code.as_deref(),
+        Some("auxiliary_artifact_file_too_large")
+    );
+
+    let report = verify_manifest_with_base(
+        manifest,
+        temp.path(),
+        VerifyOptions {
+            limits: ResourceLimits {
+                max_auxiliary_artifact_bytes: sidecar_hash.size_bytes,
+                ..ResourceLimits::default()
+            },
+            ..VerifyOptions::default()
+        },
+    );
+    assert!(report.ok, "{:?}", report.errors);
+    assert_eq!(
+        report.auxiliary_artifacts[0].sha256.as_deref(),
+        Some(sidecar_hash.sha256.as_str())
+    );
+}
+
+#[test]
 fn verification_report_deserializes_missing_auxiliary_artifacts_field() {
     let root = tempfile::tempdir().unwrap();
     let (temp, manifest, _manifest_path) = identity_manifest(root.path());

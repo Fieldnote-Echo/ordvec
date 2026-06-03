@@ -19,6 +19,7 @@ pub const DEFAULT_MAX_ROW_IDENTITY_JSONL_LINE_BYTES: usize = 64 * 1024;
 pub const DEFAULT_MAX_ROW_IDENTITY_ROWS: usize = 10_000_000;
 pub const DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES: usize = 64 * 1024 * 1024;
 pub const DEFAULT_MAX_AUXILIARY_ARTIFACTS: usize = 1024;
+pub const DEFAULT_MAX_AUXILIARY_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_MAX_REPORT_ISSUES: usize = 1024;
 pub const DEFAULT_MAX_CACHED_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -1238,7 +1239,12 @@ fn verify_auxiliary_artifacts(
         match resolve_auxiliary_artifact_path(artifact, &document.base_dir, options, report) {
             AuxiliaryPathResolution::Resolved(resolved) => {
                 entry.canonical_path = Some(path_to_display(&resolved.canonical_path));
-                match sha256_file(&resolved.resolved_path) {
+                match sha256_file_bounded(
+                    &resolved.resolved_path,
+                    options.limits.max_auxiliary_artifact_bytes,
+                    "auxiliary_artifact_file_too_large",
+                    "auxiliary artifact",
+                ) {
                     Ok(hash) => {
                         entry.sha256 = Some(hash.sha256.clone());
                         entry.size_bytes = Some(hash.size_bytes);
@@ -1273,17 +1279,17 @@ fn verify_auxiliary_artifacts(
                         }
                     }
                     Err(err) => {
-                        mark_auxiliary_artifact_failed(
-                            &mut entry,
-                            "auxiliary_artifact_hash_failed",
-                        );
-                        report.error(
-                            "auxiliary_artifact_hash_failed",
+                        let code = err.code().unwrap_or("auxiliary_artifact_hash_failed");
+                        mark_auxiliary_artifact_failed(&mut entry, code);
+                        let message = if err.code().is_some() {
+                            err.to_string()
+                        } else {
                             format!(
                                 "failed to hash auxiliary artifact {:?}: {err}",
                                 artifact.name
-                            ),
-                        );
+                            )
+                        };
+                        report.error(code, message);
                     }
                 }
             }
@@ -1542,6 +1548,7 @@ pub struct ResourceLimits {
     pub max_row_identity_rows: usize,
     pub max_row_identity_tracked_db_id_bytes: usize,
     pub max_auxiliary_artifacts: usize,
+    pub max_auxiliary_artifact_bytes: u64,
     pub max_report_issues: usize,
     pub max_cached_report_bytes: u64,
 }
@@ -1554,6 +1561,7 @@ impl Default for ResourceLimits {
             max_row_identity_rows: DEFAULT_MAX_ROW_IDENTITY_ROWS,
             max_row_identity_tracked_db_id_bytes: DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES,
             max_auxiliary_artifacts: DEFAULT_MAX_AUXILIARY_ARTIFACTS,
+            max_auxiliary_artifact_bytes: DEFAULT_MAX_AUXILIARY_ARTIFACT_BYTES,
             max_report_issues: DEFAULT_MAX_REPORT_ISSUES,
             max_cached_report_bytes: DEFAULT_MAX_CACHED_REPORT_BYTES,
         }
