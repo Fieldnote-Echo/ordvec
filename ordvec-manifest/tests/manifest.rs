@@ -3,10 +3,11 @@ use ordvec_manifest::{
     create_manifest_for_index, create_manifest_for_index_with_options, load_manifest_file,
     load_manifest_file_with_options, sha256_file, verify_index_manifest, verify_manifest_with_base,
     AuxiliaryArtifact, AuxiliaryArtifactState, CalibrationOrdinalization, CalibrationProfileRef,
-    DistortionBounds, DistortionEvidence, DistortionEvidenceKind, DistortionProfileArtifactRef,
-    DistortionScope, EncoderDistortionProfileRef, EncoderSpec, ManifestIndexParams, MetricSpec,
-    NullModelSpec, ProfileArtifactRef, ProfileParameterization, ResourceLimits, RowIdentity,
-    VerifyOptions, CALIBRATION_SCHEMA_VERSION, ENCODER_DISTORTION_SCHEMA_VERSION,
+    CreateManifestOptions, CreateRowIdentity, DistortionBounds, DistortionEvidence,
+    DistortionEvidenceKind, DistortionProfileArtifactRef, DistortionScope,
+    EncoderDistortionProfileRef, EncoderSpec, ManifestIndexParams, MetricSpec, NullModelSpec,
+    ProfileArtifactRef, ProfileParameterization, ResourceLimits, RowIdentity, VerifyOptions,
+    CALIBRATION_SCHEMA_VERSION, ENCODER_DISTORTION_SCHEMA_VERSION,
 };
 use serde_json::json;
 use std::fs;
@@ -1027,6 +1028,29 @@ fn encoder_distortion_identity_bounds_and_scope_are_checked() {
 }
 
 #[test]
+fn encoder_distortion_bounds_ratio_overflow_is_rejected() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    let mut profile = distortion_profile(
+        &manifest,
+        None,
+        None,
+        DistortionEvidenceKind::CallerAsserted,
+    );
+    profile.bounds.declared_lower_bound = Some(f64::MIN_POSITIVE);
+    profile.bounds.declared_upper_bound = Some(f64::MAX);
+    profile.bounds.estimated_distortion = Some(1.0);
+    manifest.encoder_distortion = Some(profile);
+
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    assert!(
+        error_codes(&report).contains(&"encoder_distortion_distortion_mismatch"),
+        "{:?}",
+        report.errors
+    );
+}
+
+#[test]
 fn encoder_distortion_profile_artifact_checks_are_enforced() {
     let temp = tempfile::tempdir().unwrap();
     let case = tempfile::tempdir_in(temp.path()).unwrap();
@@ -1055,6 +1079,19 @@ fn encoder_distortion_profile_artifact_checks_are_enforced() {
         report.encoder_distortion.profile_sha256.as_deref(),
         Some(profile_hash.sha256.as_str())
     );
+
+    let report = verify_manifest_with_base(
+        manifest.clone(),
+        case.path(),
+        VerifyOptions {
+            limits: ResourceLimits {
+                max_encoder_distortion_profile_bytes: 16,
+                ..ResourceLimits::default()
+            },
+            ..VerifyOptions::default()
+        },
+    );
+    assert!(error_codes(&report).contains(&"encoder_distortion_profile_too_large"));
 
     let mut missing_profile = manifest.clone();
     let missing = missing_profile.encoder_distortion.as_mut().unwrap();
@@ -1192,6 +1229,20 @@ fn encoder_distortion_can_bind_to_calibration_profile_id() {
     let report = verify_manifest_with_base(mismatch, case.path(), VerifyOptions::default());
     assert!(
         error_codes(&report).contains(&"encoder_distortion_calibration_profile_mismatch"),
+        "{:?}",
+        report.errors
+    );
+
+    let mut padded = manifest.clone();
+    let calibration_profile_id = padded.calibration.as_ref().unwrap().profile_id.clone();
+    padded
+        .encoder_distortion
+        .as_mut()
+        .unwrap()
+        .calibration_profile_id = Some(format!(" {calibration_profile_id} "));
+    let report = verify_manifest_with_base(padded, case.path(), VerifyOptions::default());
+    assert!(
+        error_codes(&report).contains(&"encoder_distortion_calibration_profile_id_whitespace"),
         "{:?}",
         report.errors
     );
@@ -2111,6 +2162,36 @@ fn cli_create_verify_and_exit_codes() {
     );
 
     let mut document = load_manifest_file(&manifest).unwrap();
+    let profile_path = temp.path().join("distortion.json");
+    let profile_hash = write_profile(&profile_path, 128);
+    document.manifest.encoder_distortion = Some(distortion_profile(
+        &document.manifest,
+        Some("distortion.json".to_string()),
+        Some(profile_hash),
+        DistortionEvidenceKind::EmpiricalSample,
+    ));
+    fs::write(
+        &manifest,
+        serde_json::to_string_pretty(&document.manifest).unwrap(),
+    )
+    .unwrap();
+    let output = Command::new(bin)
+        .args([
+            "verify",
+            "--manifest",
+            manifest.to_str().unwrap(),
+            "--max-encoder-distortion-profile-bytes",
+            "16",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("encoder_distortion_profile_too_large")
+    );
+
+    document.manifest.encoder_distortion = None;
     document.manifest.artifact.sha256 =
         "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string();
     fs::write(
@@ -2745,6 +2826,68 @@ fn sqlite_cache_key_includes_encoder_distortion_profile_bytes() {
         "distortion profile drift must force fresh verification"
     );
     assert!(error_codes(&cached).contains(&"encoder_distortion_profile_sha256_mismatch"));
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
+fn sqlite_cache_key_does_not_hash_oversized_encoder_distortion_profile() {
+    let temp = tempfile::tempdir().unwrap();
+    let profile_dir = temp.path().join("profiles");
+    fs::create_dir(&profile_dir).unwrap();
+    let index = write_index(temp.path());
+    let manifest_path = temp.path().join("manifest.json");
+    let mut manifest = create_manifest_for_index(
+        &index,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap();
+    let profile_path = profile_dir.join("distortion.json");
+    let profile_hash = write_profile(&profile_path, 128);
+    manifest.encoder_distortion = Some(distortion_profile(
+        &manifest,
+        Some("profiles/distortion.json".to_string()),
+        Some(profile_hash),
+        DistortionEvidenceKind::EmpiricalSample,
+    ));
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let document = load_manifest_file(&manifest_path).unwrap();
+    let db = temp.path().join("registry.sqlite");
+
+    let report = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions::default(),
+        true,
+    )
+    .unwrap();
+    assert!(report.ok, "{:?}", report.errors);
+
+    let limited = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions {
+            limits: ResourceLimits {
+                max_encoder_distortion_profile_bytes: 16,
+                ..ResourceLimits::default()
+            },
+            ..VerifyOptions::default()
+        },
+        true,
+    )
+    .unwrap();
+    assert!(
+        error_codes(&limited).contains(&"encoder_distortion_profile_too_large"),
+        "{:?}",
+        limited.errors
+    );
 }
 
 #[cfg(feature = "sqlite")]

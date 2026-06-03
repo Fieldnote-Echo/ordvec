@@ -600,7 +600,12 @@ fn current_encoder_distortion_profile_sha256(
     ) else {
         return Ok(None);
     };
-    match sha256_file(&resolved.resolved_path) {
+    match sha256_file_bounded(
+        &resolved.resolved_path,
+        options.limits.max_encoder_distortion_profile_bytes,
+        "encoder_distortion_profile_too_large",
+        "encoder distortion profile",
+    ) {
         Ok(hash) => Ok(Some(hash.sha256)),
         Err(_) => Ok(None),
     }

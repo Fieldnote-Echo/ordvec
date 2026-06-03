@@ -21,6 +21,7 @@ pub const DEFAULT_MAX_ROW_IDENTITY_ROWS: usize = 10_000_000;
 pub const DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES: usize = 64 * 1024 * 1024;
 pub const DEFAULT_MAX_AUXILIARY_ARTIFACTS: usize = 1024;
 pub const DEFAULT_MAX_AUXILIARY_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_MAX_ENCODER_DISTORTION_PROFILE_BYTES: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_MAX_REPORT_ISSUES: usize = 1024;
 pub const DEFAULT_MAX_CACHED_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -981,15 +982,22 @@ fn validate_encoder_distortion_bounds(bounds: &DistortionBounds, report: &mut Ve
         if lower.is_finite() && upper.is_finite() && lower > 0.0 && upper > 0.0 {
             if let Some(estimated) = bounds.estimated_distortion {
                 let expected = upper / lower;
-                let tolerance = 1e-9_f64.max(expected.abs() * 1e-9);
-                if estimated.is_finite() && (estimated - expected).abs() > tolerance {
+                if !expected.is_finite() {
                     report.error(
                         "encoder_distortion_distortion_mismatch",
-                        format!(
-                            "encoder_distortion.bounds.estimated_distortion {} does not match declared_upper_bound / declared_lower_bound {}",
-                            estimated, expected
-                        ),
+                        "encoder_distortion.bounds.declared_upper_bound / declared_lower_bound must be finite",
                     );
+                } else {
+                    let tolerance = 1e-9_f64.max(expected.abs() * 1e-9);
+                    if estimated.is_finite() && (estimated - expected).abs() > tolerance {
+                        report.error(
+                            "encoder_distortion_distortion_mismatch",
+                            format!(
+                                "encoder_distortion.bounds.estimated_distortion {} does not match declared_upper_bound / declared_lower_bound {}",
+                                estimated, expected
+                            ),
+                        );
+                    }
                 }
             }
         }
@@ -1132,7 +1140,12 @@ fn validate_encoder_distortion_profile_artifact(
         ) {
             report.encoder_distortion.profile_canonical_path =
                 Some(path_to_display(&resolved.canonical_path));
-            match sha256_file(&resolved.resolved_path) {
+            match sha256_file_bounded(
+                &resolved.resolved_path,
+                options.limits.max_encoder_distortion_profile_bytes,
+                "encoder_distortion_profile_too_large",
+                "encoder distortion profile",
+            ) {
                 Ok(hash) => {
                     report.encoder_distortion.profile_sha256 = Some(hash.sha256.clone());
                     report.encoder_distortion.profile_size_bytes = Some(hash.size_bytes);
@@ -1155,6 +1168,7 @@ fn validate_encoder_distortion_profile_artifact(
                         );
                     }
                 }
+                Err(ManifestError::LimitExceeded { code, message }) => report.error(code, message),
                 Err(err) => report.error(
                     "encoder_distortion_profile_hash_failed",
                     format!("failed to hash encoder distortion profile: {err}"),
@@ -1179,6 +1193,13 @@ fn validate_encoder_distortion_calibration(
         );
         return;
     }
+    if calibration_profile_id.trim() != calibration_profile_id {
+        report.error(
+            "encoder_distortion_calibration_profile_id_whitespace",
+            "encoder_distortion.calibration_profile_id must not contain leading or trailing whitespace",
+        );
+        return;
+    }
     let Some(calibration) = calibration else {
         report.error(
             "encoder_distortion_calibration_missing",
@@ -1186,6 +1207,7 @@ fn validate_encoder_distortion_calibration(
         );
         return;
     };
+    // Calibration profile ids are manifest identifiers; keep matching exact.
     if calibration.profile_id != *calibration_profile_id {
         report.error(
             "encoder_distortion_calibration_profile_mismatch",
@@ -2148,6 +2170,7 @@ pub struct ResourceLimits {
     pub max_row_identity_tracked_db_id_bytes: usize,
     pub max_auxiliary_artifacts: usize,
     pub max_auxiliary_artifact_bytes: u64,
+    pub max_encoder_distortion_profile_bytes: u64,
     pub max_report_issues: usize,
     pub max_cached_report_bytes: u64,
 }
@@ -2161,6 +2184,7 @@ impl Default for ResourceLimits {
             max_row_identity_tracked_db_id_bytes: DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES,
             max_auxiliary_artifacts: DEFAULT_MAX_AUXILIARY_ARTIFACTS,
             max_auxiliary_artifact_bytes: DEFAULT_MAX_AUXILIARY_ARTIFACT_BYTES,
+            max_encoder_distortion_profile_bytes: DEFAULT_MAX_ENCODER_DISTORTION_PROFILE_BYTES,
             max_report_issues: DEFAULT_MAX_REPORT_ISSUES,
             max_cached_report_bytes: DEFAULT_MAX_CACHED_REPORT_BYTES,
         }
