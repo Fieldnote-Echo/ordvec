@@ -272,9 +272,10 @@ structurally valid file can still be untrusted. If an index file crosses a
 trust boundary (network transfer, shared storage), verify it before loading.
 The full GitHub checkout includes a publish=false sidecar CLI,
 `ordvec-manifest`, that binds an index file to a JSON manifest by SHA-256,
-header metadata, row identity, and attestation shape checks. It does not sign
-artifacts, manage keys, or decide deployment trust policy. No in-format crypto
-is shipped because it would add key management the library can't own. See
+header metadata, row identity, named auxiliary sidecars, and attestation shape
+checks. It does not sign artifacts, manage keys, or decide deployment trust
+policy. No in-format crypto is shipped because it would add key management the
+library can't own. See
 [`docs/PERSISTED_FORMAT.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/PERSISTED_FORMAT.md),
 [`docs/INDEX_PROVENANCE.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/INDEX_PROVENANCE.md),
 and [`THREAT_MODEL.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/THREAT_MODEL.md)

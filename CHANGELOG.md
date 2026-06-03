@@ -18,7 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added bounded parser/report defaults to `ordvec-manifest` verification for
   manifest JSON size, row-identity JSONL line length, row count,
-  duplicate-tracking memory, report issue count, and SQLite cached report size.
+  duplicate-tracking memory, auxiliary artifact declaration count and bytes,
+  report issue count, and SQLite cached report size.
+
+### Added
+
+- Added named auxiliary artifact verification to `ordvec-manifest`, including
+  required/optional sidecar states, path/size/SHA-256 checks, deterministic
+  report entries, and SQLite cache invalidation for declared sidecar bytes.
 
 ## 0.3.0 - 2026-05-29
 

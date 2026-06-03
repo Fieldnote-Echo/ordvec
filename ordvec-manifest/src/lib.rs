@@ -18,6 +18,8 @@ pub const DEFAULT_MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_MAX_ROW_IDENTITY_JSONL_LINE_BYTES: usize = 64 * 1024;
 pub const DEFAULT_MAX_ROW_IDENTITY_ROWS: usize = 10_000_000;
 pub const DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_MAX_AUXILIARY_ARTIFACTS: usize = 1024;
+pub const DEFAULT_MAX_AUXILIARY_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_MAX_REPORT_ISSUES: usize = 1024;
 pub const DEFAULT_MAX_CACHED_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -174,7 +176,7 @@ pub fn verify_index_manifest(
 
 pub fn verify_manifest(document: &ManifestDocument, options: VerifyOptions) -> VerificationReport {
     let mut report = VerificationReport::new(Some(document.manifest.manifest_id.clone()));
-    validate_manifest_shape(&document.manifest, &mut report);
+    validate_manifest_shape(&document.manifest, &options.limits, &mut report);
 
     let artifact_display_path = document.manifest.artifact.path.clone();
     report.artifact.manifest_path = Some(artifact_display_path.clone());
@@ -235,6 +237,7 @@ pub fn verify_manifest(document: &ManifestDocument, options: VerifyOptions) -> V
         }
     }
 
+    verify_auxiliary_artifacts(document, &options, &mut report);
     verify_row_identity(document, &options, &mut report);
     verify_calibration(document, &options, &mut report);
     verify_attestations(&document.manifest, &mut report);
@@ -244,7 +247,11 @@ pub fn verify_manifest(document: &ManifestDocument, options: VerifyOptions) -> V
     report
 }
 
-fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationReport) {
+fn validate_manifest_shape(
+    manifest: &IndexManifest,
+    limits: &ResourceLimits,
+    report: &mut VerificationReport,
+) {
     if manifest.schema_version != SCHEMA_VERSION {
         report.error(
             "schema_version_unsupported",
@@ -337,6 +344,8 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
         }
     }
 
+    validate_auxiliary_artifact_shape(manifest, limits, report);
+
     validate_optional_non_empty(
         "embedding_model_revision_empty",
         "embedding.model_revision must be non-empty when present",
@@ -410,6 +419,46 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
             report.error(
                 "extension_key_not_namespaced",
                 format!("extension key {key:?} must be namespaced"),
+            );
+        }
+    }
+}
+
+fn validate_auxiliary_artifact_shape(
+    manifest: &IndexManifest,
+    limits: &ResourceLimits,
+    report: &mut VerificationReport,
+) {
+    if !check_auxiliary_artifact_count(manifest, limits, report) {
+        return;
+    }
+    let mut names = HashSet::new();
+    for artifact in &manifest.auxiliary_artifacts {
+        let name = artifact.name.trim();
+        if name.is_empty() {
+            report.error(
+                "auxiliary_artifact_name_empty",
+                "auxiliary artifact name must be non-empty",
+            );
+        } else if !names.insert(name.to_string()) {
+            report.error(
+                "auxiliary_artifact_name_duplicate",
+                format!("auxiliary artifact name {name:?} is duplicated"),
+            );
+        }
+
+        if artifact.path.trim().is_empty() {
+            report.error(
+                "auxiliary_artifact_path_empty",
+                format!("auxiliary artifact {name:?} path must be non-empty"),
+            );
+        }
+        if !is_sha256_hex(&artifact.sha256) {
+            report.error(
+                "auxiliary_artifact_sha256_invalid",
+                format!(
+                    "auxiliary artifact {name:?} sha256 must be a lowercase 64-character hex SHA-256 digest"
+                ),
             );
         }
     }
@@ -1161,6 +1210,314 @@ fn expected_profile_shape(
     }
 }
 
+fn verify_auxiliary_artifacts(
+    document: &ManifestDocument,
+    options: &VerifyOptions,
+    report: &mut VerificationReport,
+) {
+    if !check_auxiliary_artifact_count(&document.manifest, &options.limits, report) {
+        return;
+    }
+    let artifacts = auxiliary_artifacts_in_report_order(&document.manifest);
+    let base_canonical = if options.allow_path_escape {
+        None
+    } else {
+        match fs::canonicalize(&document.base_dir) {
+            Ok(path) => Some(path),
+            Err(err) => {
+                for artifact in artifacts {
+                    let mut entry = auxiliary_artifact_report_entry(artifact, &document.base_dir);
+                    if artifact.path.trim().is_empty() {
+                        mark_auxiliary_artifact_failed(&mut entry, "auxiliary_artifact_path_empty");
+                    } else {
+                        report.error(
+                            "auxiliary_artifact_base_dir_unavailable",
+                            format!(
+                                "failed to canonicalize base_dir {} for auxiliary artifact {:?}: {err}",
+                                document.base_dir.display(),
+                                artifact.name
+                            ),
+                        );
+                        mark_auxiliary_artifact_failed(
+                            &mut entry,
+                            "auxiliary_artifact_base_dir_unavailable",
+                        );
+                    }
+                    report.auxiliary_artifacts.push(entry);
+                }
+                return;
+            }
+        }
+    };
+
+    for artifact in artifacts {
+        let mut entry = auxiliary_artifact_report_entry(artifact, &document.base_dir);
+
+        if artifact.path.trim().is_empty() {
+            mark_auxiliary_artifact_failed(&mut entry, "auxiliary_artifact_path_empty");
+            report.auxiliary_artifacts.push(entry);
+            continue;
+        }
+
+        match resolve_auxiliary_artifact_path(
+            artifact,
+            &document.base_dir,
+            base_canonical.as_deref(),
+            options,
+            report,
+        ) {
+            AuxiliaryPathResolution::Resolved(resolved) => {
+                entry.canonical_path = Some(path_to_display(&resolved.canonical_path));
+                match sha256_file_bounded(
+                    &resolved.resolved_path,
+                    options.limits.max_auxiliary_artifact_bytes,
+                    "auxiliary_artifact_file_too_large",
+                    "auxiliary artifact",
+                ) {
+                    Ok(hash) => {
+                        entry.sha256 = Some(hash.sha256.clone());
+                        entry.size_bytes = Some(hash.size_bytes);
+                        if !hex_digest_eq(&hash.sha256, &artifact.sha256) {
+                            mark_auxiliary_artifact_failed(
+                                &mut entry,
+                                "auxiliary_artifact_sha256_mismatch",
+                            );
+                            report.error(
+                                "auxiliary_artifact_sha256_mismatch",
+                                format!(
+                                    "auxiliary artifact {:?} SHA-256 was {}, manifest declares {}",
+                                    artifact.name, hash.sha256, artifact.sha256
+                                ),
+                            );
+                        }
+                        if hash.size_bytes != artifact.file_size_bytes {
+                            mark_auxiliary_artifact_failed(
+                                &mut entry,
+                                "auxiliary_artifact_file_size_mismatch",
+                            );
+                            report.error(
+                                "auxiliary_artifact_file_size_mismatch",
+                                format!(
+                                    "auxiliary artifact {:?} size was {}, manifest declares {}",
+                                    artifact.name, hash.size_bytes, artifact.file_size_bytes
+                                ),
+                            );
+                        }
+                        if entry.reason_code.is_none() {
+                            entry.state = AuxiliaryArtifactState::Verified;
+                        }
+                    }
+                    Err(err) => {
+                        let code = err.code().unwrap_or("auxiliary_artifact_hash_failed");
+                        mark_auxiliary_artifact_failed(&mut entry, code);
+                        let message = if err.code().is_some() {
+                            err.to_string()
+                        } else {
+                            format!(
+                                "failed to hash auxiliary artifact {:?}: {err}",
+                                artifact.name
+                            )
+                        };
+                        report.error(code, message);
+                    }
+                }
+            }
+            AuxiliaryPathResolution::OptionalAbsent => {
+                entry.state = AuxiliaryArtifactState::OptionalAbsent;
+                entry.reason_code = Some("auxiliary_artifact_optional_absent".to_string());
+            }
+            AuxiliaryPathResolution::MissingRequired => {
+                entry.state = AuxiliaryArtifactState::MissingRequired;
+                entry.reason_code = Some("auxiliary_artifact_missing_required".to_string());
+            }
+            AuxiliaryPathResolution::Failed(code) => {
+                entry.state = AuxiliaryArtifactState::Failed;
+                entry.reason_code = Some(code);
+            }
+        }
+
+        report.auxiliary_artifacts.push(entry);
+    }
+}
+
+fn auxiliary_artifact_report_entry(
+    artifact: &AuxiliaryArtifact,
+    base_dir: &Path,
+) -> AuxiliaryArtifactReport {
+    let resolved_path = if artifact.path.trim().is_empty() {
+        None
+    } else {
+        Some(path_to_display(&auxiliary_artifact_resolved_path(
+            artifact, base_dir,
+        )))
+    };
+    AuxiliaryArtifactReport {
+        name: artifact.name.clone(),
+        manifest_path: artifact.path.clone(),
+        resolved_path,
+        canonical_path: None,
+        expected_sha256: Some(artifact.sha256.clone()),
+        expected_size_bytes: Some(artifact.file_size_bytes),
+        required: artifact.required,
+        state: AuxiliaryArtifactState::Failed,
+        reason_code: None,
+        sha256: None,
+        size_bytes: None,
+    }
+}
+
+fn check_auxiliary_artifact_count(
+    manifest: &IndexManifest,
+    limits: &ResourceLimits,
+    report: &mut VerificationReport,
+) -> bool {
+    let count = manifest.auxiliary_artifacts.len();
+    if count <= limits.max_auxiliary_artifacts {
+        return true;
+    }
+    if !report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "auxiliary_artifact_count_limit_exceeded")
+    {
+        push_report_issue_bounded(
+            &mut report.errors,
+            limits,
+            "auxiliary_artifact_count_limit_exceeded",
+            format!(
+                "auxiliary_artifacts has {count} entries, exceeding max_auxiliary_artifacts={}",
+                limits.max_auxiliary_artifacts
+            ),
+        );
+    }
+    false
+}
+
+fn auxiliary_artifacts_in_report_order(manifest: &IndexManifest) -> Vec<&AuxiliaryArtifact> {
+    let mut artifacts: Vec<_> = manifest.auxiliary_artifacts.iter().collect();
+    artifacts.sort_by(|left, right| {
+        left.name
+            .cmp(&right.name)
+            .then_with(|| left.path.cmp(&right.path))
+            .then_with(|| left.required.cmp(&right.required))
+    });
+    artifacts
+}
+
+enum AuxiliaryPathResolution {
+    Resolved(ResolvedPath),
+    OptionalAbsent,
+    MissingRequired,
+    Failed(String),
+}
+
+fn resolve_auxiliary_artifact_path(
+    artifact: &AuxiliaryArtifact,
+    base_dir: &Path,
+    base_canonical: Option<&Path>,
+    options: &VerifyOptions,
+    report: &mut VerificationReport,
+) -> AuxiliaryPathResolution {
+    let path = Path::new(&artifact.path);
+    if path.is_absolute() && !options.allow_absolute_paths {
+        report.error(
+            "auxiliary_artifact_absolute_path_rejected",
+            format!(
+                "absolute auxiliary artifact path {} for {:?} is rejected by default",
+                path.display(),
+                artifact.name
+            ),
+        );
+        return AuxiliaryPathResolution::Failed(
+            "auxiliary_artifact_absolute_path_rejected".to_string(),
+        );
+    }
+
+    if !path.is_absolute() && !options.allow_path_escape && has_lexical_escape(path) {
+        report.error(
+            "auxiliary_artifact_path_escape_rejected",
+            format!(
+                "relative auxiliary artifact path {} for {:?} escapes the manifest base",
+                path.display(),
+                artifact.name
+            ),
+        );
+        return AuxiliaryPathResolution::Failed(
+            "auxiliary_artifact_path_escape_rejected".to_string(),
+        );
+    }
+
+    let resolved_path = auxiliary_artifact_resolved_path(artifact, base_dir);
+    let canonical_path = match fs::canonicalize(&resolved_path) {
+        Ok(path) => path,
+        Err(err) if err.kind() == io::ErrorKind::NotFound && !artifact.required => {
+            return AuxiliaryPathResolution::OptionalAbsent;
+        }
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {
+            report.error(
+                "auxiliary_artifact_missing_required",
+                format!(
+                    "required auxiliary artifact {:?} is missing at {}",
+                    artifact.name,
+                    resolved_path.display()
+                ),
+            );
+            return AuxiliaryPathResolution::MissingRequired;
+        }
+        Err(err) => {
+            report.error(
+                "auxiliary_artifact_path_unavailable",
+                format!(
+                    "failed to canonicalize auxiliary artifact {:?} at {}: {err}",
+                    artifact.name,
+                    resolved_path.display()
+                ),
+            );
+            return AuxiliaryPathResolution::Failed(
+                "auxiliary_artifact_path_unavailable".to_string(),
+            );
+        }
+    };
+
+    if let Some(base_canonical) = base_canonical {
+        if !canonical_path.starts_with(base_canonical) {
+            report.error(
+                "auxiliary_artifact_path_escape_rejected",
+                format!(
+                    "canonical auxiliary artifact path {} for {:?} is outside manifest base {}",
+                    canonical_path.display(),
+                    artifact.name,
+                    base_canonical.display()
+                ),
+            );
+            return AuxiliaryPathResolution::Failed(
+                "auxiliary_artifact_path_escape_rejected".to_string(),
+            );
+        }
+    }
+
+    AuxiliaryPathResolution::Resolved(ResolvedPath {
+        resolved_path,
+        canonical_path,
+    })
+}
+
+fn auxiliary_artifact_resolved_path(artifact: &AuxiliaryArtifact, base_dir: &Path) -> PathBuf {
+    let path = Path::new(&artifact.path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base_dir.join(path)
+    }
+}
+
+fn mark_auxiliary_artifact_failed(entry: &mut AuxiliaryArtifactReport, code: &str) {
+    entry.state = AuxiliaryArtifactState::Failed;
+    if entry.reason_code.is_none() {
+        entry.reason_code = Some(code.to_string());
+    }
+}
+
 fn verify_attestations(manifest: &IndexManifest, report: &mut VerificationReport) {
     if manifest.attestations.is_empty() {
         report
@@ -1236,6 +1593,8 @@ pub struct ResourceLimits {
     pub max_row_identity_jsonl_line_bytes: usize,
     pub max_row_identity_rows: usize,
     pub max_row_identity_tracked_db_id_bytes: usize,
+    pub max_auxiliary_artifacts: usize,
+    pub max_auxiliary_artifact_bytes: u64,
     pub max_report_issues: usize,
     pub max_cached_report_bytes: u64,
 }
@@ -1247,6 +1606,8 @@ impl Default for ResourceLimits {
             max_row_identity_jsonl_line_bytes: DEFAULT_MAX_ROW_IDENTITY_JSONL_LINE_BYTES,
             max_row_identity_rows: DEFAULT_MAX_ROW_IDENTITY_ROWS,
             max_row_identity_tracked_db_id_bytes: DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES,
+            max_auxiliary_artifacts: DEFAULT_MAX_AUXILIARY_ARTIFACTS,
+            max_auxiliary_artifact_bytes: DEFAULT_MAX_AUXILIARY_ARTIFACT_BYTES,
             max_report_issues: DEFAULT_MAX_REPORT_ISSUES,
             max_cached_report_bytes: DEFAULT_MAX_CACHED_REPORT_BYTES,
         }
@@ -1348,6 +1709,14 @@ fn has_lexical_escape(path: &Path) -> bool {
     false
 }
 
+fn default_required() -> bool {
+    true
+}
+
+fn is_true(value: &bool) -> bool {
+    *value
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IndexManifest {
@@ -1355,6 +1724,8 @@ pub struct IndexManifest {
     pub manifest_id: String,
     pub created_at: String,
     pub artifact: Artifact,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub auxiliary_artifacts: Vec<AuxiliaryArtifact>,
     pub embedding: Embedding,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub calibration: Option<CalibrationProfileRef>,
@@ -1379,6 +1750,17 @@ pub struct Artifact {
     pub bytes_per_vec: usize,
     pub params: ManifestIndexParams,
     pub file_size_bytes: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuxiliaryArtifact {
+    pub name: String,
+    pub path: String,
+    pub sha256: String,
+    pub file_size_bytes: u64,
+    #[serde(default = "default_required", skip_serializing_if = "is_true")]
+    pub required: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1605,6 +1987,8 @@ pub struct VerificationReport {
     pub checked_at: String,
     pub manifest_id: Option<String>,
     pub artifact: ArtifactReport,
+    #[serde(default)]
+    pub auxiliary_artifacts: Vec<AuxiliaryArtifactReport>,
     pub row_identity: RowIdentityReport,
     pub calibration: CalibrationReport,
     pub attestation_shape_checks: Vec<AttestationShapeCheck>,
@@ -1620,6 +2004,7 @@ impl VerificationReport {
             checked_at: Utc::now().to_rfc3339_opts(SecondsFormat::Nanos, true),
             manifest_id,
             artifact: ArtifactReport::default(),
+            auxiliary_artifacts: Vec::new(),
             row_identity: RowIdentityReport::default(),
             calibration: CalibrationReport::default(),
             attestation_shape_checks: Vec::new(),
@@ -1642,6 +2027,34 @@ pub struct ArtifactReport {
     pub sha256: Option<String>,
     pub size_bytes: Option<u64>,
     pub metadata: Option<MetadataReport>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuxiliaryArtifactReport {
+    pub name: String,
+    pub manifest_path: String,
+    #[serde(default)]
+    pub resolved_path: Option<String>,
+    #[serde(default)]
+    pub canonical_path: Option<String>,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_size_bytes: Option<u64>,
+    pub required: bool,
+    pub state: AuxiliaryArtifactState,
+    pub reason_code: Option<String>,
+    pub sha256: Option<String>,
+    pub size_bytes: Option<u64>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AuxiliaryArtifactState {
+    Verified,
+    OptionalAbsent,
+    MissingRequired,
+    Failed,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -1910,6 +2323,7 @@ pub fn create_manifest_for_index_with_options(
         manifest_id: format!("urn:uuid:{}", Uuid::new_v4()),
         created_at: Utc::now().to_rfc3339_opts(SecondsFormat::Secs, true),
         artifact,
+        auxiliary_artifacts: Vec::new(),
         embedding: Embedding {
             model: embedding_model.into(),
             dim: metadata.dim,

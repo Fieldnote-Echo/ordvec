@@ -67,11 +67,22 @@ The manifest verifier checks:
 - row identity, either explicit `row_id_identity` or a strict JSONL row map
   whose `row_id` equals the zero-based line number and whose `db_id` is
   non-empty, NUL-free, and unique by default;
+- declared auxiliary artifacts, checking each caller-named sidecar's path,
+  SHA-256 digest, byte length, and configured byte ceiling under the same
+  default path policy as the primary index artifact;
 - optional `calibration` profile references, checking profile identity,
   path/hash integrity, encoder identity, and ordinalization compatibility;
 - attestation **shape** only: predicate type, builder id when present, and at
   least one subject SHA-256 matching the artifact when attestations are
   supplied.
+
+Auxiliary artifacts are for application-owned sidecars such as metadata,
+secondary indexes, or stores that a caller intends to load together with the
+ordvec index. The verifier does not interpret those bytes; it only reports
+whether declared required members were verified, whether optional members were
+present or absent, and whether any declared member failed path, size, or digest
+checks or exceeded the configured auxiliary artifact byte limit. Callers should
+load sidecars only after the relevant declaration is verified.
 
 When present, `calibration` binds an index artifact to a hashed ordinal profile
 used to interpret overlap, bucket, sign, or rank evidence under a calibrated

@@ -2,11 +2,11 @@
 
 Repo-local, publish=false sidecar verifier for ordvec index manifests.
 
-It verifies index bytes, probed header metadata, row identity, optional
-calibration profile references, and attestation shape before a caller loads an
-ordvec index. It does not sign artifacts, manage keys, call networks, mutate
-index files, decide deployment trust policy, compute calibration statistics, or
-change the C ABI.
+It verifies index bytes, probed header metadata, row identity, named auxiliary
+artifacts, optional calibration profile references, and attestation shape before
+a caller loads an ordvec index. It does not sign artifacts, manage keys, call
+networks, mutate index files, decide deployment trust policy, compute
+calibration statistics, or change the C ABI.
 
 ```sh
 cargo run -p ordvec-manifest -- create \
@@ -36,6 +36,10 @@ Stable limit codes are part of the contract:
   (`row_identity_row_count_limit_exceeded`);
 - row-identity duplicate-tracking `db_id` bytes: 64 MiB
   (`row_identity_duplicate_tracking_limit_exceeded`);
+- auxiliary artifact declarations: 1,024
+  (`auxiliary_artifact_count_limit_exceeded`);
+- auxiliary artifact bytes per declared file: 64 MiB
+  (`auxiliary_artifact_file_too_large`);
 - collected report issues: 1,024, after which a
   `verification_report_issue_limit_exceeded` issue is emitted;
 - SQLite cached report JSON: 4 MiB (`sqlite_cached_report_too_large`).
@@ -43,7 +47,8 @@ Stable limit codes are part of the contract:
 The CLI exposes matching override flags on `inspect`, `verify`, `create`,
 `sqlite verify`, and `sqlite activate`: `--max-manifest-bytes`,
 `--max-row-map-line-bytes`, `--max-row-map-rows`,
-`--max-row-map-tracked-id-bytes`, `--max-report-issues`, and
+`--max-row-map-tracked-id-bytes`, `--max-auxiliary-artifacts`,
+`--max-auxiliary-artifact-bytes`, `--max-report-issues`, and
 `--max-cached-report-bytes`. Library callers can override the same ceilings via
 `VerifyOptions::limits`.
 
@@ -55,6 +60,8 @@ Stable limit codes:
 | row-identity JSONL line bytes | `row_identity_line_too_large` | `row_identity_line_too_large` |
 | row-identity JSONL rows | `row_identity_row_count_limit_exceeded` | `row_identity_row_count_limit_exceeded` |
 | row-identity duplicate-tracking `db_id` bytes | `row_identity_duplicate_tracking_limit_exceeded` | `row_identity_duplicate_tracking_limit_exceeded` |
+| auxiliary artifact declarations | `auxiliary_artifact_count_limit_exceeded` | n/a |
+| auxiliary artifact bytes per declared file | `auxiliary_artifact_file_too_large` | n/a |
 | collected verification report issues | `verification_report_issue_limit_exceeded` | n/a |
 | SQLite cached report JSON bytes | n/a | `sqlite_cached_report_too_large` |
 
@@ -67,11 +74,160 @@ otherwise be reported. These limits bound metadata parsing and report/cache
 growth; hashing an index or calibration profile is still proportional to the
 artifact bytes being verified.
 
+Manifests may declare `auxiliary_artifacts` for caller-owned sidecars that
+should be integrity-checked with the same path policy as the primary index.
+Each entry has a stable `name`, relative `path`, lowercase SHA-256 digest,
+`file_size_bytes`, and a `required` flag that defaults to `true`. Required
+members fail verification when missing, tampered, size-mismatched, or rejected
+by path policy. Optional members are reported as verified when present or as
+`optional_absent` with a stable reason code when absent. The verifier checks
+bytes only; application semantics remain with the caller.
+
+The unified JSON report carries per-sidecar audit fields. A successful
+auxiliary artifact verification includes the manifest path, resolved/canonical
+paths, declared digest/length, and observed digest/length:
+
+```json
+{
+  "ok": true,
+  "checked_at": "2026-06-03T17:20:00Z",
+  "manifest_id": "urn:uuid:11111111-1111-4111-8111-111111111111",
+  "artifact": {
+    "manifest_path": "index.tvrq",
+    "observed_path": "index.tvrq",
+    "canonical_path": "/srv/index/index.tvrq",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "size_bytes": 4096,
+    "metadata": null
+  },
+  "auxiliary_artifacts": [
+    {
+      "name": "ordgrep.sidecar",
+      "manifest_path": "ordgrep.sidecar.json",
+      "resolved_path": "/srv/index/ordgrep.sidecar.json",
+      "canonical_path": "/srv/index/ordgrep.sidecar.json",
+      "expected_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "expected_size_bytes": 128,
+      "required": true,
+      "state": "verified",
+      "reason_code": null,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size_bytes": 128
+    }
+  ],
+  "row_identity": {
+    "kind": "row_id_identity",
+    "manifest_path": null,
+    "canonical_path": null,
+    "sha256": null,
+    "row_count": 1024,
+    "validated_rows": 1024
+  },
+  "calibration": {
+    "present": false,
+    "schema_version": null,
+    "profile_id": null,
+    "calibrated_for_model": null,
+    "ordinalization": null,
+    "null_model": null,
+    "profile_manifest_path": null,
+    "profile_canonical_path": null,
+    "profile_sha256": null,
+    "profile_size_bytes": null
+  },
+  "attestation_shape_checks": [],
+  "errors": [],
+  "warnings": [],
+  "skipped_checks": []
+}
+```
+
+A tampered or missing sidecar fails closed while preserving declared fields for
+audit logging. Observed digest/length fields are present when bytes could be
+read and absent when the file is missing:
+
+```json
+{
+  "ok": false,
+  "checked_at": "2026-06-03T17:21:00Z",
+  "manifest_id": "urn:uuid:11111111-1111-4111-8111-111111111111",
+  "artifact": {
+    "manifest_path": "index.tvrq",
+    "observed_path": "index.tvrq",
+    "canonical_path": "/srv/index/index.tvrq",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "size_bytes": 4096,
+    "metadata": null
+  },
+  "auxiliary_artifacts": [
+    {
+      "name": "ordgrep.sidecar",
+      "manifest_path": "ordgrep.sidecar.json",
+      "resolved_path": "/srv/index/ordgrep.sidecar.json",
+      "canonical_path": "/srv/index/ordgrep.sidecar.json",
+      "expected_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "expected_size_bytes": 128,
+      "required": true,
+      "state": "failed",
+      "reason_code": "auxiliary_artifact_sha256_mismatch",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "size_bytes": 128
+    },
+    {
+      "name": "required-model-card",
+      "manifest_path": "model-card.json",
+      "resolved_path": "/srv/index/model-card.json",
+      "expected_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "expected_size_bytes": 2048,
+      "required": true,
+      "state": "missing_required",
+      "reason_code": "auxiliary_artifact_missing_required",
+      "sha256": null,
+      "size_bytes": null
+    }
+  ],
+  "row_identity": {
+    "kind": "row_id_identity",
+    "manifest_path": null,
+    "canonical_path": null,
+    "sha256": null,
+    "row_count": 1024,
+    "validated_rows": 1024
+  },
+  "calibration": {
+    "present": false,
+    "schema_version": null,
+    "profile_id": null,
+    "calibrated_for_model": null,
+    "ordinalization": null,
+    "null_model": null,
+    "profile_manifest_path": null,
+    "profile_canonical_path": null,
+    "profile_sha256": null,
+    "profile_size_bytes": null
+  },
+  "attestation_shape_checks": [],
+  "errors": [
+    {
+      "code": "auxiliary_artifact_sha256_mismatch",
+      "message": "auxiliary artifact \"ordgrep.sidecar\" SHA-256 was 3333333333333333333333333333333333333333333333333333333333333333, manifest declares 2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "code": "auxiliary_artifact_missing_required",
+      "message": "required auxiliary artifact \"required-model-card\" is missing at /srv/index/model-card.json"
+    }
+  ],
+  "warnings": [],
+  "skipped_checks": []
+}
+```
+
 With `--features sqlite`, the `sqlite verify` and `sqlite activate` subcommands
 add a local cache/audit log plus one active-manifest pointer. This is not a
 full named registry. `sqlite verify --use-cache` reuses only reports whose
-manifest, verification options, artifact bytes, row-identity bytes, and
-calibration profile bytes still match; otherwise it runs fresh verification and
-stores a new report. `sqlite activate --force` writes the active pointer even
-when verification fails, emits a `sqlite_activation_forced` warning in JSON
-output, and exits zero because it did mutate activation state.
+manifest, verification options, artifact bytes, row-identity bytes,
+calibration profile bytes, and declared auxiliary artifact states/bytes still
+match; otherwise it runs fresh verification and stores a new report.
+`sqlite activate --force` writes the active pointer even when verification
+fails, emits a `sqlite_activation_forced` warning in JSON output, and exits zero
+because it did mutate activation state.
