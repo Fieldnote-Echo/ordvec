@@ -575,10 +575,10 @@ fn verify_row_identity(
                     &mut report.errors,
                 ) {
                     Ok(stats) => {
-                        report.row_identity.validated_rows = Some(stats.row_count);
-                        if let Some(hash) = stats.sha256 {
+                        report.row_identity.validated_rows = Some(stats.validated_rows);
+                        if let Some(hash) = &stats.sha256 {
                             report.row_identity.sha256 = Some(hash.clone());
-                            if !hex_digest_eq(&hash, sha256) {
+                            if !hex_digest_eq(hash, sha256) {
                                 report.error(
                                     "row_identity_sha256_mismatch",
                                     format!(
@@ -587,12 +587,21 @@ fn verify_row_identity(
                                 );
                             }
                         }
-                        if stats.row_count != *row_count {
+                        if stats.row_count != *row_count
+                            && !report
+                                .errors
+                                .iter()
+                                .any(|issue| issue.code == "row_identity_row_count_mismatch")
+                        {
+                            let observed_rows = if stats.sha256.is_some() {
+                                stats.row_count.to_string()
+                            } else {
+                                format!("at least {}", stats.row_count)
+                            };
                             report.error(
                                 "row_identity_row_count_mismatch",
                                 format!(
-                                    "row identity file has {} rows, manifest declares {}",
-                                    stats.row_count, row_count
+                                    "row identity file has {observed_rows} rows, manifest declares {row_count}"
                                 ),
                             );
                         }
@@ -1712,7 +1721,7 @@ fn push_report_issue_bounded(
     code: impl Into<String>,
     message: impl Into<String>,
 ) {
-    let limit = limits.max_report_issues.max(1);
+    let limit = limits.max_report_issues;
     if errors.len() < limit {
         errors.push(ReportIssue::new(code, message));
         return;
@@ -1723,7 +1732,8 @@ fn push_report_issue_bounded(
     {
         return;
     }
-    errors.truncate(limit.saturating_sub(1));
+    let detail_limit = limit.saturating_sub(1);
+    errors.truncate(detail_limit);
     errors.push(ReportIssue::new(
         "verification_report_issue_limit_exceeded",
         format!("verification report issue count exceeded max_report_issues={limit}"),
@@ -1731,12 +1741,13 @@ fn push_report_issue_bounded(
 }
 
 fn enforce_report_issue_limit(errors: &mut Vec<ReportIssue>, limits: &ResourceLimits) {
-    let limit = limits.max_report_issues.max(1);
+    let limit = limits.max_report_issues;
     if errors.len() <= limit {
         return;
     }
     errors.retain(|issue| issue.code != "verification_report_issue_limit_exceeded");
-    errors.truncate(limit.saturating_sub(1));
+    let detail_limit = limit.saturating_sub(1);
+    errors.truncate(detail_limit);
     errors.push(ReportIssue::new(
         "verification_report_issue_limit_exceeded",
         format!("verification report issue count exceeded max_report_issues={limit}"),
@@ -1934,6 +1945,7 @@ pub fn write_manifest_file(
 #[derive(Clone, Debug)]
 struct JsonlStats {
     row_count: usize,
+    validated_rows: usize,
     sha256: Option<String>,
 }
 
@@ -1959,11 +1971,8 @@ fn validate_jsonl_rows(
     let mut seen = HashSet::new();
     let mut seen_db_id_bytes = 0usize;
     let mut row_count = 0usize;
+    let mut validated_rows = 0usize;
     let mut line = Vec::new();
-    let row_read_limit = expected_row_count
-        .and_then(|row_count| row_count.checked_add(1))
-        .unwrap_or(usize::MAX)
-        .min(limits.max_row_identity_rows);
     let mut reached_eof = true;
 
     while let Some(too_long) = read_bounded_line(
@@ -1974,20 +1983,32 @@ fn validate_jsonl_rows(
     )? {
         let line_idx = row_count;
         row_count += 1;
-        if row_count > row_read_limit {
+        if row_count > limits.max_row_identity_rows {
             reached_eof = false;
-            if row_count > limits.max_row_identity_rows {
+            push_report_issue_bounded(
+                errors,
+                limits,
+                "row_identity_row_count_limit_exceeded",
+                format!(
+                    "row identity file has more than max_row_identity_rows={} rows",
+                    limits.max_row_identity_rows
+                ),
+            );
+            break;
+        }
+        if let Some(expected_row_count) = expected_row_count {
+            if row_count > expected_row_count {
+                reached_eof = false;
                 push_report_issue_bounded(
                     errors,
                     limits,
-                    "row_identity_row_count_limit_exceeded",
+                    "row_identity_row_count_mismatch",
                     format!(
-                        "row identity file has more than max_row_identity_rows={} rows",
-                        limits.max_row_identity_rows
+                        "row identity file has more than declared row_count={expected_row_count}"
                     ),
                 );
+                break;
             }
-            break;
         }
         if too_long {
             reached_eof = false;
@@ -2027,6 +2048,7 @@ fn validate_jsonl_rows(
         if let Some(parent_id) = &row.parent_id {
             validate_row_id_string("parent_id", parent_id, line_idx, limits, errors);
         }
+        validated_rows += 1;
         if !allow_duplicate_db_ids {
             if seen.contains(&row.db_id) {
                 push_report_issue_bounded(
@@ -2058,6 +2080,7 @@ fn validate_jsonl_rows(
 
     Ok(JsonlStats {
         row_count,
+        validated_rows,
         sha256: reached_eof.then(|| hex::encode(hasher.finalize())),
     })
 }

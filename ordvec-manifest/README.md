@@ -26,15 +26,19 @@ verify with default settings. If an artifact or JSONL row map lives outside the
 manifest directory, pass `--allow-path-escape` at create time and again at
 verify time.
 
-Verification uses bounded parser/report defaults on both CLI and library paths:
+Verification uses bounded parser/report defaults on both CLI and library paths.
+Stable limit codes are part of the contract:
 
-- manifest JSON: 1 MiB before JSON parsing;
-- row-identity JSONL line: 64 KiB;
-- row-identity JSONL rows: 10,000,000;
-- row-identity duplicate-tracking `db_id` bytes: 64 MiB;
+- manifest JSON: 1 MiB before JSON parsing
+  (`manifest_file_too_large`);
+- row-identity JSONL line: 64 KiB (`row_identity_line_too_large`);
+- row-identity JSONL rows: 10,000,000
+  (`row_identity_row_count_limit_exceeded`);
+- row-identity duplicate-tracking `db_id` bytes: 64 MiB
+  (`row_identity_duplicate_tracking_limit_exceeded`);
 - collected report issues: 1,024, after which a
   `verification_report_issue_limit_exceeded` issue is emitted;
-- SQLite cached report JSON: 4 MiB.
+- SQLite cached report JSON: 4 MiB (`sqlite_cached_report_too_large`).
 
 The CLI exposes matching override flags on `inspect`, `verify`, `create`,
 `sqlite verify`, and `sqlite activate`: `--max-manifest-bytes`,
@@ -56,9 +60,12 @@ Stable limit codes:
 
 Oversized byte-limit overrides that cannot be represented safely by the
 bounded in-memory reader fail before reading with the same stable
-`ManifestError::code()` as the corresponding byte limit. These limits bound
-metadata parsing and report/cache growth; hashing an index or calibration
-profile is still proportional to the artifact bytes being verified.
+`ManifestError::code()` as the corresponding byte limit. A
+`max_report_issues` override of `0` suppresses detail issues and returns only
+the `verification_report_issue_limit_exceeded` sentinel when any issue would
+otherwise be reported. These limits bound metadata parsing and report/cache
+growth; hashing an index or calibration profile is still proportional to the
+artifact bytes being verified.
 
 With `--features sqlite`, the `sqlite verify` and `sqlite activate` subcommands
 add a local cache/audit log plus one active-manifest pointer. This is not a

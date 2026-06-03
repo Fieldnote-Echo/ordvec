@@ -447,6 +447,46 @@ fn row_identity_extra_rows_reports_mismatch_not_limit() {
 }
 
 #[test]
+fn row_identity_validated_rows_excludes_unparsed_overrun_line() {
+    let temp = tempfile::tempdir().unwrap();
+    let index = write_rankquant_index(temp.path(), 1);
+    let rows = temp.path().join("rows.jsonl");
+    write_row_map(
+        &rows,
+        &[
+            ("aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", None),
+            ("ffffffff-1111-4222-8333-444444444444", None),
+            ("55555555-6666-4777-8888-999999999999", None),
+        ],
+    );
+    let row_hash = sha256_file(&rows).unwrap();
+    let manifest_path = temp.path().join("manifest.json");
+    let mut manifest = create_manifest_for_index(
+        &index,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap();
+    manifest.row_identity = RowIdentity::Jsonl {
+        path: "rows.jsonl".to_string(),
+        sha256: row_hash.sha256,
+        row_count: 1,
+        id_kind: "uuid".to_string(),
+        db: None,
+    };
+
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    assert_eq!(report.row_identity.validated_rows, Some(1));
+    assert!(report.row_identity.sha256.is_none());
+    assert!(report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "row_identity_row_count_mismatch"
+            && issue.message.contains("more than declared row_count=1")));
+}
+
+#[test]
 fn row_identity_duplicate_tracking_limit_is_bounded() {
     let temp = tempfile::tempdir().unwrap();
     let index = write_rankquant_index(temp.path(), 2);
@@ -620,6 +660,40 @@ fn row_identity_report_issue_limit_truncates_per_row_errors() {
     );
     assert_eq!(report.errors.len(), 2);
     assert!(error_codes(&report).contains(&"verification_report_issue_limit_exceeded"));
+}
+
+#[test]
+fn row_identity_zero_report_issue_limit_reports_configured_limit() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    let rows = temp.path().join("rows.jsonl");
+    fs::write(&rows, b"{}\n{}\n").unwrap();
+    let hash = sha256_file(&rows).unwrap();
+    manifest.row_identity = RowIdentity::Jsonl {
+        path: "rows.jsonl".to_string(),
+        sha256: hash.sha256,
+        row_count: 2,
+        id_kind: "uuid".to_string(),
+        db: None,
+    };
+
+    let report = verify_manifest_with_base(
+        manifest,
+        temp.path(),
+        VerifyOptions {
+            limits: ResourceLimits {
+                max_report_issues: 0,
+                ..ResourceLimits::default()
+            },
+            ..VerifyOptions::default()
+        },
+    );
+    assert_eq!(report.errors.len(), 1);
+    assert_eq!(
+        report.errors[0].code,
+        "verification_report_issue_limit_exceeded"
+    );
+    assert!(report.errors[0].message.contains("max_report_issues=0"));
 }
 
 #[test]
