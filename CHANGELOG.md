@@ -10,8 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Added a pre-1.0 compatibility policy covering stable and experimental Rust
-  APIs, Python bindings, repo-local C/Go sidecars, primitive persisted formats,
-  MSRV/feature changes, and release-note review expectations.
+  APIs, Python bindings, repo-local C/Go/Manifest sidecars, primitive persisted
+  formats, examples/docs, MSRV/feature changes, and release-note review
+  expectations.
 
 ## 0.3.0 - 2026-05-29
 

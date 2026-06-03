@@ -165,8 +165,8 @@ The runtime dependency floor is `numpy>=2.2`.
   [`docs/c-api.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/c-api.md).
 - **Pre-1.0 compatibility policy:**
   [`docs/compatibility-policy.md`](docs/compatibility-policy.md) defines the
-  stable, experimental, repo-local, persisted-format, MSRV, and release-note
-  review surfaces.
+  stable, experimental, repo-local sidecar, persisted-format, examples/docs,
+  MSRV, and release-note review surfaces.
 - **Formal proof spine:** [`ordvec-formalization`](https://github.com/Fieldnote-Echo/ordvec-formalization),
   including its [`proof-spine`](https://github.com/Fieldnote-Echo/ordvec-formalization/blob/main/docs/proof-spine.md),
   [`theorem-map`](https://github.com/Fieldnote-Echo/ordvec-formalization/blob/main/docs/theorem-map.md),

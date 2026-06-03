@@ -5,9 +5,10 @@ changes. The project nevertheless treats downstream embedders as real users:
 patch releases should be safe for stable surfaces, and any intentional break
 must be visible in release notes before users discover it at build or load time.
 
-This policy covers the published Rust crate, the PyPI bindings, the repo-local
-C/Go sidecars, and the primitive persisted index formats. It does not promise a
-database or application-store lifecycle outside `ordvec` itself.
+This policy covers the published Rust crate, the PyPI bindings, repo-local
+sidecars (C ABI, Go, and Manifest), the primitive persisted index formats, and
+project examples and documentation. It does not promise a database or
+application-store lifecycle outside `ordvec` itself.
 
 ## Versioning Rules
 
@@ -74,6 +75,14 @@ New feature flags must declare their stability class before merging:
 Changing the default feature set is a compatibility-impacting minor-release
 decision unless the change is strictly additive and documented.
 
+### Examples and Documentation
+
+Examples and documentation are compatibility guidance, not executable API
+surface. Patch releases should keep examples buildable and avoid changing
+documented stable-surface behavior without release-note context. Corrections,
+clarifications, and security warnings are allowed in patch releases when they
+make the documented contract more accurate.
+
 ### Python Package
 
 The PyPI package exposes the same four headline classes: `Rank`, `RankQuant`,
@@ -84,11 +93,11 @@ Python, NumPy, or wheel-platform floor changes are minor-release changes unless
 a supported upstream version has reached end-of-life or a security issue makes
 the old floor unsafe. Such changes require release-note migration text.
 
-### Repo-Local C ABI and Go Wrapper
+### Repo-Local Sidecars (C ABI, Go, and Manifest)
 
-`ordvec-ffi` and `ordvec-go` are repo-local sidecars, not part of the published
-core `.crate`. They are still consumed by embedders from the GitHub checkout, so
-their compatibility must be reviewed before releases.
+`ordvec-ffi`, `ordvec-go`, and `ordvec-manifest` are repo-local sidecars, not
+part of the published core `.crate`. They are still consumed by embedders from
+the GitHub checkout, so their compatibility must be reviewed before releases.
 
 The C ABI is versioned by `ORDVEC_ABI_VERSION`. ABI v1 currently supports
 loading persisted `RankQuant` and `Bitmap` files, metadata inspection, and
@@ -100,6 +109,11 @@ a new ABI version or clear migration notes.
 
 The Go wrapper follows the C ABI. Source-breaking Go API changes require the
 same compatibility classification in release notes.
+
+The `ordvec-manifest` CLI and its v1 JSON schema are also treated as stable
+repo-local surfaces. Patch releases should not introduce breaking changes to
+the CLI arguments, emitted error codes, or JSON schema structure. Minor
+releases may introduce schema or CLI updates with documented migration steps.
 
 ### Primitive Persisted Formats
 
@@ -114,11 +128,13 @@ types:
 Patch releases should keep valid files from the same minor series loadable.
 Loader hardening may reject malformed files, forged sizes, trailing bytes, bad
 dimensions, unsupported bit widths, or files outside documented capacity
-limits.
+limits. This bucket tracks the format-compatibility requirements from #118.
 
 Minor releases may introduce new format versions or new sidecar conventions.
 When they do, release notes must say whether older files remain readable and
-what migration, if any, a downstream store should perform.
+what migration, if any, a downstream store should perform. Older library
+versions are not expected to be forward-compatible with newer format versions
+and should safely reject them.
 
 This is a primitive file-format promise. It does not define an application
 database lifecycle, `.ordgrep` store schema, cache invalidation policy,
@@ -141,8 +157,8 @@ embedders, requires explicit release-note classification.
 Every release should include a compatibility-impact review:
 
 - Identify whether the release is patch-compatible or minor-breaking.
-- List touched stable Rust, Python, C ABI, Go, persisted-format, feature, and
-  MSRV surfaces.
+- List touched stable Rust, Python, C ABI, Go, Manifest, persisted-format,
+  examples/docs, feature, and MSRV surfaces.
 - Add changelog migration notes for every intentional break.
 - For patch releases, run a SemVer compatibility check against the latest
   published crate when practical, or record why an equivalent check was not

@@ -119,8 +119,8 @@ filename. Until either is updated, the corresponding gated publish fails
 2. Review the compatibility impact against
    [`docs/compatibility-policy.md`](docs/compatibility-policy.md):
    - classify the release as patch-compatible or minor-breaking;
-   - identify touched stable Rust, Python, C ABI, Go, persisted-format,
-     feature, and MSRV surfaces;
+   - identify touched stable Rust, Python, C ABI, Go, Manifest,
+     persisted-format, examples/docs, feature, and MSRV surfaces;
    - for patch releases, run a SemVer compatibility check against the latest
      published crate when practical, or record why an equivalent check is not
      useful for this release;
