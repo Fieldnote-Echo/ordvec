@@ -18,6 +18,7 @@ pub const DEFAULT_MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
 pub const DEFAULT_MAX_ROW_IDENTITY_JSONL_LINE_BYTES: usize = 64 * 1024;
 pub const DEFAULT_MAX_ROW_IDENTITY_ROWS: usize = 10_000_000;
 pub const DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES: usize = 64 * 1024 * 1024;
+pub const DEFAULT_MAX_AUXILIARY_ARTIFACTS: usize = 1024;
 pub const DEFAULT_MAX_REPORT_ISSUES: usize = 1024;
 pub const DEFAULT_MAX_CACHED_REPORT_BYTES: u64 = 4 * 1024 * 1024;
 
@@ -174,7 +175,7 @@ pub fn verify_index_manifest(
 
 pub fn verify_manifest(document: &ManifestDocument, options: VerifyOptions) -> VerificationReport {
     let mut report = VerificationReport::new(Some(document.manifest.manifest_id.clone()));
-    validate_manifest_shape(&document.manifest, &mut report);
+    validate_manifest_shape(&document.manifest, &options.limits, &mut report);
 
     let artifact_display_path = document.manifest.artifact.path.clone();
     report.artifact.manifest_path = Some(artifact_display_path.clone());
@@ -245,7 +246,11 @@ pub fn verify_manifest(document: &ManifestDocument, options: VerifyOptions) -> V
     report
 }
 
-fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationReport) {
+fn validate_manifest_shape(
+    manifest: &IndexManifest,
+    limits: &ResourceLimits,
+    report: &mut VerificationReport,
+) {
     if manifest.schema_version != SCHEMA_VERSION {
         report.error(
             "schema_version_unsupported",
@@ -338,7 +343,7 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
         }
     }
 
-    validate_auxiliary_artifact_shape(manifest, report);
+    validate_auxiliary_artifact_shape(manifest, limits, report);
 
     validate_optional_non_empty(
         "embedding_model_revision_empty",
@@ -418,7 +423,14 @@ fn validate_manifest_shape(manifest: &IndexManifest, report: &mut VerificationRe
     }
 }
 
-fn validate_auxiliary_artifact_shape(manifest: &IndexManifest, report: &mut VerificationReport) {
+fn validate_auxiliary_artifact_shape(
+    manifest: &IndexManifest,
+    limits: &ResourceLimits,
+    report: &mut VerificationReport,
+) {
+    if !check_auxiliary_artifact_count(manifest, limits, report) {
+        return;
+    }
     let mut names = HashSet::new();
     for artifact in &manifest.auxiliary_artifacts {
         let name = artifact.name.trim();
@@ -1202,6 +1214,9 @@ fn verify_auxiliary_artifacts(
     options: &VerifyOptions,
     report: &mut VerificationReport,
 ) {
+    if !check_auxiliary_artifact_count(&document.manifest, &options.limits, report) {
+        return;
+    }
     for artifact in auxiliary_artifacts_in_report_order(&document.manifest) {
         let mut entry = AuxiliaryArtifactReport {
             name: artifact.name.clone(),
@@ -1288,6 +1303,33 @@ fn verify_auxiliary_artifacts(
 
         report.auxiliary_artifacts.push(entry);
     }
+}
+
+fn check_auxiliary_artifact_count(
+    manifest: &IndexManifest,
+    limits: &ResourceLimits,
+    report: &mut VerificationReport,
+) -> bool {
+    let count = manifest.auxiliary_artifacts.len();
+    if count <= limits.max_auxiliary_artifacts {
+        return true;
+    }
+    if !report
+        .errors
+        .iter()
+        .any(|issue| issue.code == "auxiliary_artifact_count_limit_exceeded")
+    {
+        push_report_issue_bounded(
+            &mut report.errors,
+            limits,
+            "auxiliary_artifact_count_limit_exceeded",
+            format!(
+                "auxiliary_artifacts has {count} entries, exceeding max_auxiliary_artifacts={}",
+                limits.max_auxiliary_artifacts
+            ),
+        );
+    }
+    false
 }
 
 fn auxiliary_artifacts_in_report_order(manifest: &IndexManifest) -> Vec<&AuxiliaryArtifact> {
@@ -1499,6 +1541,7 @@ pub struct ResourceLimits {
     pub max_row_identity_jsonl_line_bytes: usize,
     pub max_row_identity_rows: usize,
     pub max_row_identity_tracked_db_id_bytes: usize,
+    pub max_auxiliary_artifacts: usize,
     pub max_report_issues: usize,
     pub max_cached_report_bytes: u64,
 }
@@ -1510,6 +1553,7 @@ impl Default for ResourceLimits {
             max_row_identity_jsonl_line_bytes: DEFAULT_MAX_ROW_IDENTITY_JSONL_LINE_BYTES,
             max_row_identity_rows: DEFAULT_MAX_ROW_IDENTITY_ROWS,
             max_row_identity_tracked_db_id_bytes: DEFAULT_MAX_ROW_IDENTITY_TRACKED_DB_ID_BYTES,
+            max_auxiliary_artifacts: DEFAULT_MAX_AUXILIARY_ARTIFACTS,
             max_report_issues: DEFAULT_MAX_REPORT_ISSUES,
             max_cached_report_bytes: DEFAULT_MAX_CACHED_REPORT_BYTES,
         }
@@ -1889,6 +1933,7 @@ pub struct VerificationReport {
     pub checked_at: String,
     pub manifest_id: Option<String>,
     pub artifact: ArtifactReport,
+    #[serde(default)]
     pub auxiliary_artifacts: Vec<AuxiliaryArtifactReport>,
     pub row_identity: RowIdentityReport,
     pub calibration: CalibrationReport,

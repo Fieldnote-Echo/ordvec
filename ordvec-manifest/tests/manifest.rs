@@ -1513,6 +1513,46 @@ fn auxiliary_artifact_schema_rejects_unknown_fields_and_duplicate_names() {
 }
 
 #[test]
+fn auxiliary_artifact_count_limit_is_enforced_before_verification() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
+    fs::write(temp.path().join("a.bin"), b"a").unwrap();
+    fs::write(temp.path().join("b.bin"), b"b").unwrap();
+    let a_hash = sha256_file(temp.path().join("a.bin")).unwrap();
+    let b_hash = sha256_file(temp.path().join("b.bin")).unwrap();
+    manifest.auxiliary_artifacts = vec![
+        auxiliary_artifact("a", "a.bin", a_hash, true),
+        auxiliary_artifact("b", "b.bin", b_hash, true),
+    ];
+
+    let report = verify_manifest_with_base(
+        manifest,
+        temp.path(),
+        VerifyOptions {
+            limits: ResourceLimits {
+                max_auxiliary_artifacts: 1,
+                ..ResourceLimits::default()
+            },
+            ..VerifyOptions::default()
+        },
+    );
+    assert!(error_codes(&report).contains(&"auxiliary_artifact_count_limit_exceeded"));
+    assert!(report.auxiliary_artifacts.is_empty());
+}
+
+#[test]
+fn verification_report_deserializes_missing_auxiliary_artifacts_field() {
+    let root = tempfile::tempdir().unwrap();
+    let (temp, manifest, _manifest_path) = identity_manifest(root.path());
+    let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
+    let mut value = serde_json::to_value(&report).unwrap();
+    value.as_object_mut().unwrap().remove("auxiliary_artifacts");
+
+    let parsed: ordvec_manifest::VerificationReport = serde_json::from_value(value).unwrap();
+    assert!(parsed.auxiliary_artifacts.is_empty());
+}
+
+#[test]
 fn attestation_shape_requires_matching_subject_sha256() {
     let root = tempfile::tempdir().unwrap();
     let (temp, mut manifest, _manifest_path) = identity_manifest(root.path());
@@ -2030,6 +2070,70 @@ fn sqlite_cache_key_includes_auxiliary_artifact_bytes() {
 
 #[cfg(feature = "sqlite")]
 #[test]
+fn sqlite_cache_key_includes_failed_auxiliary_artifact_observed_bytes() {
+    let temp = tempfile::tempdir().unwrap();
+    let index = write_index(temp.path());
+    let manifest_path = temp.path().join("manifest.json");
+    let mut manifest = create_manifest_for_index(
+        &index,
+        CreateRowIdentity::RowIdIdentity,
+        "test-embedding",
+        &manifest_path,
+    )
+    .unwrap();
+    let sidecar_path = temp.path().join("sidecar.json");
+    fs::write(&sidecar_path, b"{\"version\":1}\n").unwrap();
+    let expected_hash = sha256_file(&sidecar_path).unwrap();
+    manifest.auxiliary_artifacts = vec![auxiliary_artifact(
+        "sidecar",
+        "sidecar.json",
+        expected_hash,
+        true,
+    )];
+    fs::write(
+        &manifest_path,
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    let document = load_manifest_file(&manifest_path).unwrap();
+    let db = temp.path().join("registry.sqlite");
+
+    fs::write(&sidecar_path, b"{\"version\":2}\n").unwrap();
+    let first_observed = sha256_file(&sidecar_path).unwrap();
+    let report = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions::default(),
+        true,
+    )
+    .unwrap();
+    assert!(!report.ok);
+    assert_eq!(
+        report.auxiliary_artifacts[0].sha256.as_deref(),
+        Some(first_observed.sha256.as_str())
+    );
+
+    fs::write(&sidecar_path, b"{\"version\":3}\n").unwrap();
+    let second_observed = sha256_file(&sidecar_path).unwrap();
+    let cached = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        VerifyOptions::default(),
+        true,
+    )
+    .unwrap();
+    assert!(!cached.ok);
+    assert_eq!(
+        cached.auxiliary_artifacts[0].sha256.as_deref(),
+        Some(second_observed.sha256.as_str())
+    );
+    assert_ne!(first_observed.sha256, second_observed.sha256);
+}
+
+#[cfg(feature = "sqlite")]
+#[test]
 fn sqlite_cache_key_distinguishes_optional_auxiliary_absent_and_present() {
     let temp = tempfile::tempdir().unwrap();
     let index = write_index(temp.path());
@@ -2140,6 +2244,29 @@ fn sqlite_cache_key_includes_limits_and_bounds_cached_report_size() {
     assert!(cached.ok, "{:?}", cached.errors);
 
     let conn = Connection::open(&db).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM verification_reports", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(count, 1, "same limits should reuse the cached report");
+
+    let options_b = VerifyOptions {
+        limits: ResourceLimits {
+            max_report_issues: 18,
+            ..ResourceLimits::default()
+        },
+        ..VerifyOptions::default()
+    };
+    let report = ordvec_manifest::sqlite::verify_with_registry(
+        &db,
+        &document,
+        &manifest_path,
+        options_b,
+        true,
+    )
+    .unwrap();
+    assert!(report.ok, "{:?}", report.errors);
     let count: i64 = conn
         .query_row("SELECT COUNT(*) FROM verification_reports", [], |row| {
             row.get(0)

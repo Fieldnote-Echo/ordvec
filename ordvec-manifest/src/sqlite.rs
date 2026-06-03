@@ -465,9 +465,6 @@ fn current_auxiliary_artifacts_sha256(
     }
     let mut report = VerificationReport::new(None);
     verify_auxiliary_artifacts(document, options, &mut report);
-    if !report.errors.is_empty() {
-        return Ok(None);
-    }
     auxiliary_artifacts_sha256_from_report(document, &report)
 }
 
@@ -484,35 +481,27 @@ fn auxiliary_artifacts_sha256_from_report(
 
     let mut entries = Vec::with_capacity(report.auxiliary_artifacts.len());
     for entry in &report.auxiliary_artifacts {
-        match entry.state {
+        let state = match entry.state {
             AuxiliaryArtifactState::Verified => {
                 let (Some(sha256), Some(size_bytes)) = (entry.sha256.as_ref(), entry.size_bytes)
                 else {
                     return Ok(None);
                 };
-                entries.push(AuxiliaryArtifactCacheEntry {
-                    name: entry.name.clone(),
-                    path: entry.manifest_path.clone(),
-                    required: entry.required,
-                    state: "verified",
-                    sha256: Some(sha256.clone()),
-                    size_bytes: Some(size_bytes),
-                });
+                ("verified", Some(sha256.clone()), Some(size_bytes))
             }
-            AuxiliaryArtifactState::OptionalAbsent => {
-                entries.push(AuxiliaryArtifactCacheEntry {
-                    name: entry.name.clone(),
-                    path: entry.manifest_path.clone(),
-                    required: entry.required,
-                    state: "optional_absent",
-                    sha256: None,
-                    size_bytes: None,
-                });
-            }
-            AuxiliaryArtifactState::MissingRequired | AuxiliaryArtifactState::Failed => {
-                return Ok(None);
-            }
-        }
+            AuxiliaryArtifactState::OptionalAbsent => ("optional_absent", None, None),
+            AuxiliaryArtifactState::MissingRequired => ("missing_required", None, None),
+            AuxiliaryArtifactState::Failed => ("failed", entry.sha256.clone(), entry.size_bytes),
+        };
+        entries.push(AuxiliaryArtifactCacheEntry {
+            name: entry.name.clone(),
+            path: entry.manifest_path.clone(),
+            required: entry.required,
+            state: state.0,
+            reason_code: entry.reason_code.clone(),
+            sha256: state.1,
+            size_bytes: state.2,
+        });
     }
 
     let json = serde_json::to_vec(&entries)?;
@@ -525,6 +514,7 @@ struct AuxiliaryArtifactCacheEntry {
     path: String,
     required: bool,
     state: &'static str,
+    reason_code: Option<String>,
     sha256: Option<String>,
     size_bytes: Option<u64>,
 }
