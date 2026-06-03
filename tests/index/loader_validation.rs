@@ -40,42 +40,52 @@ fn assert_load_err_contains<T>(result: std::io::Result<T>, expected: &str) {
     );
 }
 
-fn rank_header(dim: u32, n_vectors: u32) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(b"TVR1");
-    v.push(1);
-    v.extend_from_slice(&dim.to_le_bytes());
-    v.extend_from_slice(&n_vectors.to_le_bytes());
-    v
+fn set_u32_field(bytes: &mut [u8], offset: usize, value: u32) {
+    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
 }
 
-fn rankquant_header(bits: u8, dim: u32, n_vectors: u32) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(b"TVRQ");
-    v.push(1);
-    v.push(bits);
-    v.extend_from_slice(&dim.to_le_bytes());
-    v.extend_from_slice(&n_vectors.to_le_bytes());
-    v
+fn rank_payload_cases(dim: usize) -> (Vec<u8>, Vec<u8>) {
+    let p = tmp("rank_empty_payload_case");
+    Rank::new(dim).write(&p).unwrap();
+    let trailing = read_bytes(&p);
+    std::fs::remove_file(&p).ok();
+    assert_eq!(trailing.len(), 13, "empty Rank file is header-only");
+    let mut truncated = trailing.clone();
+    set_u32_field(&mut truncated, 9, 1);
+    (truncated, trailing)
 }
 
-fn bitmap_header(dim: u32, n_top: u32, n_vectors: u32) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(b"TVBM");
-    v.push(1);
-    v.extend_from_slice(&dim.to_le_bytes());
-    v.extend_from_slice(&n_top.to_le_bytes());
-    v.extend_from_slice(&n_vectors.to_le_bytes());
-    v
+fn rankquant_payload_cases(bits: u8, dim: usize) -> (Vec<u8>, Vec<u8>) {
+    let p = tmp("rankquant_empty_payload_case");
+    RankQuant::new(dim, bits).write(&p).unwrap();
+    let trailing = read_bytes(&p);
+    std::fs::remove_file(&p).ok();
+    assert_eq!(trailing.len(), 14, "empty RankQuant file is header-only");
+    let mut truncated = trailing.clone();
+    set_u32_field(&mut truncated, 10, 1);
+    (truncated, trailing)
 }
 
-fn sign_bitmap_header(dim: u32, n_vectors: u32) -> Vec<u8> {
-    let mut v = Vec::new();
-    v.extend_from_slice(b"TVSB");
-    v.push(1);
-    v.extend_from_slice(&dim.to_le_bytes());
-    v.extend_from_slice(&n_vectors.to_le_bytes());
-    v
+fn bitmap_payload_cases(dim: usize, n_top: usize) -> (Vec<u8>, Vec<u8>) {
+    let p = tmp("bitmap_empty_payload_case");
+    Bitmap::new(dim, n_top).write(&p).unwrap();
+    let trailing = read_bytes(&p);
+    std::fs::remove_file(&p).ok();
+    assert_eq!(trailing.len(), 17, "empty Bitmap file is header-only");
+    let mut truncated = trailing.clone();
+    set_u32_field(&mut truncated, 13, 1);
+    (truncated, trailing)
+}
+
+fn sign_bitmap_payload_cases(dim: usize) -> (Vec<u8>, Vec<u8>) {
+    let p = tmp("sign_bitmap_empty_payload_case");
+    SignBitmap::new(dim).write(&p).unwrap();
+    let trailing = read_bytes(&p);
+    std::fs::remove_file(&p).ok();
+    assert_eq!(trailing.len(), 13, "empty SignBitmap file is header-only");
+    let mut truncated = trailing.clone();
+    set_u32_field(&mut truncated, 9, 1);
+    (truncated, trailing)
 }
 
 #[test]
@@ -193,26 +203,15 @@ fn load_sign_bitmap_accepts_any_bit_pattern() {
 
 #[test]
 fn public_loaders_report_stable_malformed_payload_context() {
+    let rank = rank_payload_cases(4);
+    let rankquant = rankquant_payload_cases(2, 8);
+    let bitmap = bitmap_payload_cases(64, 16);
+    let sign_bitmap = sign_bitmap_payload_cases(64);
     let cases: [(&str, Vec<u8>, Vec<u8>, &str); 4] = [
-        ("rank", rank_header(4, 1), rank_header(4, 0), "TVR1"),
-        (
-            "rankquant",
-            rankquant_header(2, 8, 1),
-            rankquant_header(2, 8, 0),
-            "TVRQ",
-        ),
-        (
-            "bitmap",
-            bitmap_header(64, 16, 1),
-            bitmap_header(64, 16, 0),
-            "TVBM",
-        ),
-        (
-            "sign_bitmap",
-            sign_bitmap_header(64, 1),
-            sign_bitmap_header(64, 0),
-            "TVSB",
-        ),
+        ("rank", rank.0, rank.1, "TVR1"),
+        ("rankquant", rankquant.0, rankquant.1, "TVRQ"),
+        ("bitmap", bitmap.0, bitmap.1, "TVBM"),
+        ("sign_bitmap", sign_bitmap.0, sign_bitmap.1, "TVSB"),
     ];
 
     for (suffix, truncated_header, mut trailing_bytes, label) in cases {
