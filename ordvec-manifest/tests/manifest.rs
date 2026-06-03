@@ -1415,7 +1415,7 @@ fn auxiliary_artifacts_verify_and_report_deterministically() {
             file_size_bytes: 0,
             required: false,
         },
-        auxiliary_artifact("alpha", "alpha.bin", alpha_hash, true),
+        auxiliary_artifact("alpha", "alpha.bin", alpha_hash.clone(), true),
     ];
 
     let report = verify_manifest_with_base(manifest, temp.path(), VerifyOptions::default());
@@ -1432,6 +1432,20 @@ fn auxiliary_artifacts_verify_and_report_deterministically() {
         report.auxiliary_artifacts[0].state,
         AuxiliaryArtifactState::Verified
     );
+    assert_eq!(report.auxiliary_artifacts[0].manifest_path, "alpha.bin");
+    assert!(report.auxiliary_artifacts[0]
+        .resolved_path
+        .as_deref()
+        .unwrap()
+        .ends_with("alpha.bin"));
+    assert_eq!(
+        report.auxiliary_artifacts[0].expected_sha256.as_deref(),
+        Some(alpha_hash.sha256.as_str())
+    );
+    assert_eq!(
+        report.auxiliary_artifacts[0].expected_size_bytes,
+        Some(alpha_hash.size_bytes)
+    );
     assert_eq!(
         report.auxiliary_artifacts[1].state,
         AuxiliaryArtifactState::OptionalAbsent
@@ -1440,6 +1454,16 @@ fn auxiliary_artifacts_verify_and_report_deterministically() {
         report.auxiliary_artifacts[1].reason_code.as_deref(),
         Some("auxiliary_artifact_optional_absent")
     );
+    assert_eq!(
+        report.auxiliary_artifacts[1].expected_sha256.as_deref(),
+        Some("0000000000000000000000000000000000000000000000000000000000000000")
+    );
+    assert_eq!(report.auxiliary_artifacts[1].expected_size_bytes, Some(0));
+    assert!(report.auxiliary_artifacts[1]
+        .resolved_path
+        .as_deref()
+        .unwrap()
+        .ends_with("missing-model.json"));
     assert_eq!(
         report.auxiliary_artifacts[2].state,
         AuxiliaryArtifactState::Verified
@@ -1490,6 +1514,22 @@ fn auxiliary_artifacts_fail_closed_on_tamper_missing_and_path_escape() {
     assert!(codes.contains(&"auxiliary_artifact_sha256_mismatch"));
     assert!(codes.contains(&"auxiliary_artifact_file_size_mismatch"));
     assert!(codes.contains(&"auxiliary_artifact_path_escape_rejected"));
+    let missing = report
+        .auxiliary_artifacts
+        .iter()
+        .find(|entry| entry.name == "missing")
+        .unwrap();
+    assert_eq!(missing.state, AuxiliaryArtifactState::MissingRequired);
+    assert_eq!(
+        missing.expected_sha256.as_deref(),
+        Some("0000000000000000000000000000000000000000000000000000000000000000")
+    );
+    assert_eq!(missing.expected_size_bytes, Some(0));
+    assert!(missing
+        .resolved_path
+        .as_deref()
+        .unwrap()
+        .ends_with("missing.bin"));
 }
 
 #[test]

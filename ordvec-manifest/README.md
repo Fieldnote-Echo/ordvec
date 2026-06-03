@@ -83,6 +83,145 @@ by path policy. Optional members are reported as verified when present or as
 `optional_absent` with a stable reason code when absent. The verifier checks
 bytes only; application semantics remain with the caller.
 
+The unified JSON report carries per-sidecar audit fields. A successful
+auxiliary artifact verification includes the manifest path, resolved/canonical
+paths, declared digest/length, and observed digest/length:
+
+```json
+{
+  "ok": true,
+  "checked_at": "2026-06-03T17:20:00Z",
+  "manifest_id": "urn:uuid:11111111-1111-4111-8111-111111111111",
+  "artifact": {
+    "manifest_path": "index.tvrq",
+    "observed_path": "index.tvrq",
+    "canonical_path": "/srv/index/index.tvrq",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "size_bytes": 4096,
+    "metadata": null
+  },
+  "auxiliary_artifacts": [
+    {
+      "name": "ordgrep.sidecar",
+      "manifest_path": "ordgrep.sidecar.json",
+      "resolved_path": "/srv/index/ordgrep.sidecar.json",
+      "canonical_path": "/srv/index/ordgrep.sidecar.json",
+      "expected_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "expected_size_bytes": 128,
+      "required": true,
+      "state": "verified",
+      "reason_code": null,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "size_bytes": 128
+    }
+  ],
+  "row_identity": {
+    "kind": "row_id_identity",
+    "manifest_path": null,
+    "canonical_path": null,
+    "sha256": null,
+    "row_count": 1024,
+    "validated_rows": 1024
+  },
+  "calibration": {
+    "present": false,
+    "schema_version": null,
+    "profile_id": null,
+    "calibrated_for_model": null,
+    "ordinalization": null,
+    "null_model": null,
+    "profile_manifest_path": null,
+    "profile_canonical_path": null,
+    "profile_sha256": null,
+    "profile_size_bytes": null
+  },
+  "attestation_shape_checks": [],
+  "errors": [],
+  "warnings": [],
+  "skipped_checks": []
+}
+```
+
+A tampered or missing sidecar fails closed while preserving declared fields for
+audit logging. Observed digest/length fields are present when bytes could be
+read and absent when the file is missing:
+
+```json
+{
+  "ok": false,
+  "checked_at": "2026-06-03T17:21:00Z",
+  "manifest_id": "urn:uuid:11111111-1111-4111-8111-111111111111",
+  "artifact": {
+    "manifest_path": "index.tvrq",
+    "observed_path": "index.tvrq",
+    "canonical_path": "/srv/index/index.tvrq",
+    "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+    "size_bytes": 4096,
+    "metadata": null
+  },
+  "auxiliary_artifacts": [
+    {
+      "name": "ordgrep.sidecar",
+      "manifest_path": "ordgrep.sidecar.json",
+      "resolved_path": "/srv/index/ordgrep.sidecar.json",
+      "canonical_path": "/srv/index/ordgrep.sidecar.json",
+      "expected_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+      "expected_size_bytes": 128,
+      "required": true,
+      "state": "failed",
+      "reason_code": "auxiliary_artifact_sha256_mismatch",
+      "sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+      "size_bytes": 128
+    },
+    {
+      "name": "required-model-card",
+      "manifest_path": "model-card.json",
+      "resolved_path": "/srv/index/model-card.json",
+      "expected_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+      "expected_size_bytes": 2048,
+      "required": true,
+      "state": "missing_required",
+      "reason_code": "auxiliary_artifact_missing_required",
+      "sha256": null,
+      "size_bytes": null
+    }
+  ],
+  "row_identity": {
+    "kind": "row_id_identity",
+    "manifest_path": null,
+    "canonical_path": null,
+    "sha256": null,
+    "row_count": 1024,
+    "validated_rows": 1024
+  },
+  "calibration": {
+    "present": false,
+    "schema_version": null,
+    "profile_id": null,
+    "calibrated_for_model": null,
+    "ordinalization": null,
+    "null_model": null,
+    "profile_manifest_path": null,
+    "profile_canonical_path": null,
+    "profile_sha256": null,
+    "profile_size_bytes": null
+  },
+  "attestation_shape_checks": [],
+  "errors": [
+    {
+      "code": "auxiliary_artifact_sha256_mismatch",
+      "message": "auxiliary artifact \"ordgrep.sidecar\" SHA-256 was 3333333333333333333333333333333333333333333333333333333333333333, manifest declares 2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    {
+      "code": "auxiliary_artifact_missing_required",
+      "message": "required auxiliary artifact \"required-model-card\" is missing at /srv/index/model-card.json"
+    }
+  ],
+  "warnings": [],
+  "skipped_checks": []
+}
+```
+
 With `--features sqlite`, the `sqlite verify` and `sqlite activate` subcommands
 add a local cache/audit log plus one active-manifest pointer. This is not a
 full named registry. `sqlite verify --use-cache` reuses only reports whose

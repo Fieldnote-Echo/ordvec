@@ -1218,17 +1218,40 @@ fn verify_auxiliary_artifacts(
     if !check_auxiliary_artifact_count(&document.manifest, &options.limits, report) {
         return;
     }
-    for artifact in auxiliary_artifacts_in_report_order(&document.manifest) {
-        let mut entry = AuxiliaryArtifactReport {
-            name: artifact.name.clone(),
-            manifest_path: artifact.path.clone(),
-            required: artifact.required,
-            state: AuxiliaryArtifactState::Failed,
-            reason_code: None,
-            canonical_path: None,
-            sha256: None,
-            size_bytes: None,
-        };
+    let artifacts = auxiliary_artifacts_in_report_order(&document.manifest);
+    let base_canonical = if options.allow_path_escape {
+        None
+    } else {
+        match fs::canonicalize(&document.base_dir) {
+            Ok(path) => Some(path),
+            Err(err) => {
+                for artifact in artifacts {
+                    let mut entry = auxiliary_artifact_report_entry(artifact, &document.base_dir);
+                    if artifact.path.trim().is_empty() {
+                        mark_auxiliary_artifact_failed(&mut entry, "auxiliary_artifact_path_empty");
+                    } else {
+                        report.error(
+                            "auxiliary_artifact_base_dir_unavailable",
+                            format!(
+                                "failed to canonicalize base_dir {} for auxiliary artifact {:?}: {err}",
+                                document.base_dir.display(),
+                                artifact.name
+                            ),
+                        );
+                        mark_auxiliary_artifact_failed(
+                            &mut entry,
+                            "auxiliary_artifact_base_dir_unavailable",
+                        );
+                    }
+                    report.auxiliary_artifacts.push(entry);
+                }
+                return;
+            }
+        }
+    };
+
+    for artifact in artifacts {
+        let mut entry = auxiliary_artifact_report_entry(artifact, &document.base_dir);
 
         if artifact.path.trim().is_empty() {
             mark_auxiliary_artifact_failed(&mut entry, "auxiliary_artifact_path_empty");
@@ -1236,7 +1259,13 @@ fn verify_auxiliary_artifacts(
             continue;
         }
 
-        match resolve_auxiliary_artifact_path(artifact, &document.base_dir, options, report) {
+        match resolve_auxiliary_artifact_path(
+            artifact,
+            &document.base_dir,
+            base_canonical.as_deref(),
+            options,
+            report,
+        ) {
             AuxiliaryPathResolution::Resolved(resolved) => {
                 entry.canonical_path = Some(path_to_display(&resolved.canonical_path));
                 match sha256_file_bounded(
@@ -1311,6 +1340,32 @@ fn verify_auxiliary_artifacts(
     }
 }
 
+fn auxiliary_artifact_report_entry(
+    artifact: &AuxiliaryArtifact,
+    base_dir: &Path,
+) -> AuxiliaryArtifactReport {
+    let resolved_path = if artifact.path.trim().is_empty() {
+        None
+    } else {
+        Some(path_to_display(&auxiliary_artifact_resolved_path(
+            artifact, base_dir,
+        )))
+    };
+    AuxiliaryArtifactReport {
+        name: artifact.name.clone(),
+        manifest_path: artifact.path.clone(),
+        resolved_path,
+        canonical_path: None,
+        expected_sha256: Some(artifact.sha256.clone()),
+        expected_size_bytes: Some(artifact.file_size_bytes),
+        required: artifact.required,
+        state: AuxiliaryArtifactState::Failed,
+        reason_code: None,
+        sha256: None,
+        size_bytes: None,
+    }
+}
+
 fn check_auxiliary_artifact_count(
     manifest: &IndexManifest,
     limits: &ResourceLimits,
@@ -1359,6 +1414,7 @@ enum AuxiliaryPathResolution {
 fn resolve_auxiliary_artifact_path(
     artifact: &AuxiliaryArtifact,
     base_dir: &Path,
+    base_canonical: Option<&Path>,
     options: &VerifyOptions,
     report: &mut VerificationReport,
 ) -> AuxiliaryPathResolution {
@@ -1377,23 +1433,6 @@ fn resolve_auxiliary_artifact_path(
         );
     }
 
-    let base_canonical = match fs::canonicalize(base_dir) {
-        Ok(path) => path,
-        Err(err) => {
-            report.error(
-                "auxiliary_artifact_base_dir_unavailable",
-                format!(
-                    "failed to canonicalize base_dir {} for auxiliary artifact {:?}: {err}",
-                    base_dir.display(),
-                    artifact.name
-                ),
-            );
-            return AuxiliaryPathResolution::Failed(
-                "auxiliary_artifact_base_dir_unavailable".to_string(),
-            );
-        }
-    };
-
     if !path.is_absolute() && !options.allow_path_escape && has_lexical_escape(path) {
         report.error(
             "auxiliary_artifact_path_escape_rejected",
@@ -1408,11 +1447,7 @@ fn resolve_auxiliary_artifact_path(
         );
     }
 
-    let resolved_path = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        base_dir.join(path)
-    };
+    let resolved_path = auxiliary_artifact_resolved_path(artifact, base_dir);
     let canonical_path = match fs::canonicalize(&resolved_path) {
         Ok(path) => path,
         Err(err) if err.kind() == io::ErrorKind::NotFound && !artifact.required => {
@@ -1444,25 +1479,36 @@ fn resolve_auxiliary_artifact_path(
         }
     };
 
-    if !options.allow_path_escape && !canonical_path.starts_with(&base_canonical) {
-        report.error(
-            "auxiliary_artifact_path_escape_rejected",
-            format!(
-                "canonical auxiliary artifact path {} for {:?} is outside manifest base {}",
-                canonical_path.display(),
-                artifact.name,
-                base_canonical.display()
-            ),
-        );
-        return AuxiliaryPathResolution::Failed(
-            "auxiliary_artifact_path_escape_rejected".to_string(),
-        );
+    if let Some(base_canonical) = base_canonical {
+        if !canonical_path.starts_with(base_canonical) {
+            report.error(
+                "auxiliary_artifact_path_escape_rejected",
+                format!(
+                    "canonical auxiliary artifact path {} for {:?} is outside manifest base {}",
+                    canonical_path.display(),
+                    artifact.name,
+                    base_canonical.display()
+                ),
+            );
+            return AuxiliaryPathResolution::Failed(
+                "auxiliary_artifact_path_escape_rejected".to_string(),
+            );
+        }
     }
 
     AuxiliaryPathResolution::Resolved(ResolvedPath {
         resolved_path,
         canonical_path,
     })
+}
+
+fn auxiliary_artifact_resolved_path(artifact: &AuxiliaryArtifact, base_dir: &Path) -> PathBuf {
+    let path = Path::new(&artifact.path);
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base_dir.join(path)
+    }
 }
 
 fn mark_auxiliary_artifact_failed(entry: &mut AuxiliaryArtifactReport, code: &str) {
@@ -1987,10 +2033,17 @@ pub struct ArtifactReport {
 pub struct AuxiliaryArtifactReport {
     pub name: String,
     pub manifest_path: String,
+    #[serde(default)]
+    pub resolved_path: Option<String>,
+    #[serde(default)]
+    pub canonical_path: Option<String>,
+    #[serde(default)]
+    pub expected_sha256: Option<String>,
+    #[serde(default)]
+    pub expected_size_bytes: Option<u64>,
     pub required: bool,
     pub state: AuxiliaryArtifactState,
     pub reason_code: Option<String>,
-    pub canonical_path: Option<String>,
     pub sha256: Option<String>,
     pub size_bytes: Option<u64>,
 }
