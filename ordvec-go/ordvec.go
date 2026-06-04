@@ -70,6 +70,13 @@ const (
 	KindBitmap    Kind = C.ORDVEC_INDEX_KIND_BITMAP
 )
 
+const (
+	CapFullSearch    uint64 = C.ORDVEC_CAP_FULL_SEARCH
+	CapSubsetSearch  uint64 = C.ORDVEC_CAP_SUBSET_SEARCH
+	CapStats         uint64 = C.ORDVEC_CAP_STATS
+	CapIDEqualsRowID uint64 = C.ORDVEC_CAP_ID_EQUALS_ROW_ID
+)
+
 var ErrClosed = errors.New("ordvec: index closed")
 
 type StatusError struct {

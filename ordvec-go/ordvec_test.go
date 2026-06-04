@@ -101,6 +101,10 @@ func TestLoadInfoSearchRankQuant(t *testing.T) {
 	if info.Kind != KindRankQuant || info.Dim != 16 || info.BitWidth != 2 || info.VectorCount != 4 {
 		t.Fatalf("unexpected info: %+v", info)
 	}
+	wantCaps := CapFullSearch | CapSubsetSearch | CapStats | CapIDEqualsRowID
+	if info.Capabilities&wantCaps != wantCaps {
+		t.Fatalf("missing capabilities: got %#x want all %#x", info.Capabilities, wantCaps)
+	}
 
 	hits, stats, err := idx.Search(query16(), 2, &SearchOptions{UserTag: 99})
 	if err != nil {

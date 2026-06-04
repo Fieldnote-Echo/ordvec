@@ -116,6 +116,9 @@ Search is synchronous. Caller pointers are borrowed only for the duration of
 `ordvec_index_search`; no query, candidate, hit, stats, or path pointer is
 retained after the function returns.
 
+`ordvec_index_load` takes a non-null, NUL-terminated, valid UTF-8 path string.
+Invalid UTF-8 paths return `ORDVEC_STATUS_BAD_ARGUMENT` in ABI v1.
+
 Rows are internal row ordinals. ABI v1 has no external ID map:
 `ordvec_hit_t.id` is always equal to `ordvec_hit_t.row_id` widened to
 `uint64_t`.

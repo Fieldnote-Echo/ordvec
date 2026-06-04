@@ -641,8 +641,8 @@ pub unsafe extern "C" fn ordvec_search_stats_init(stats: *mut ordvec_search_stat
 ///
 /// # Safety
 ///
-/// `path` must be a non-null, NUL-terminated C string. `out` must be non-null
-/// and point to writable memory for one `ordvec_index_t *`.
+/// `path` must be a non-null, NUL-terminated, valid UTF-8 C string. `out`
+/// must be non-null and point to writable memory for one `ordvec_index_t *`.
 pub unsafe extern "C" fn ordvec_index_load(
     path: *const c_char,
     flags: u64,
