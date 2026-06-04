@@ -1,7 +1,7 @@
 //! RankQuant (B-bit bucket-packed) integration tests.
 
 use ordvec::rank::{bucket_centre, rank_to_bucket, rank_transform};
-use ordvec::{rankquant_eval_search, RankQuant};
+use ordvec::{rankquant_eval_search, RankQuant, SearchResults};
 use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
@@ -30,6 +30,46 @@ fn ref_rankquant_eval_symmetric(a: &[f32], b: &[f32], bits: u8) -> f32 {
         acc += bucket_centre(ba, bits) * bucket_centre(bb, bits);
     }
     acc * inv_norm_sq
+}
+
+fn assert_rankquant_result_shape_and_order(
+    label: &str,
+    res: &SearchResults,
+    nq: usize,
+    k_eff: usize,
+    n_vectors: usize,
+) {
+    assert_eq!(res.nq, nq, "{label}: wrong query count");
+    assert_eq!(res.k, k_eff, "{label}: wrong effective k");
+    assert_eq!(res.scores.len(), nq * k_eff, "{label}: wrong score length");
+    assert_eq!(res.indices.len(), nq * k_eff, "{label}: wrong index length");
+
+    for qi in 0..nq {
+        let scores = res.scores_for_query(qi);
+        let ids = res.indices_for_query(qi);
+        for slot in 0..k_eff {
+            let score = scores[slot];
+            let id = ids[slot];
+            assert!(
+                score.is_finite(),
+                "{label}: non-finite score at query {qi} slot {slot}",
+            );
+            assert!(id >= 0, "{label}: negative id at query {qi} slot {slot}");
+            assert!(
+                (id as usize) < n_vectors,
+                "{label}: id {id} out of range for n={n_vectors}",
+            );
+        }
+        for slot in 1..k_eff {
+            let prev = (scores[slot - 1], ids[slot - 1]);
+            let cur = (scores[slot], ids[slot]);
+            assert!(
+                cur.0 <= prev.0,
+                "{label}: row {qi} not sorted at slots {} and {slot}",
+                slot - 1,
+            );
+        }
+    }
 }
 
 #[test]
@@ -124,6 +164,132 @@ fn rankquant_eval_search_empty_queries_does_not_transform_corpus() {
     assert_eq!(res.k, 10);
     assert!(res.scores.is_empty());
     assert!(res.indices.is_empty());
+}
+
+#[test]
+fn rankquant_hotpath_search_shapes_cover_empty_queries_and_index() {
+    let dim = 64;
+    let one_query = vec![0.0; dim];
+    for bits in [1u8, 2, 4] {
+        let empty = RankQuant::new(dim, bits);
+        let res = empty.search(&one_query, usize::MAX);
+        assert_rankquant_result_shape_and_order(
+            &format!("empty search bits={bits}"),
+            &res,
+            1,
+            0,
+            0,
+        );
+        let res = empty.search_asymmetric(&one_query, usize::MAX);
+        assert_rankquant_result_shape_and_order(
+            &format!("empty asymmetric bits={bits}"),
+            &res,
+            1,
+            0,
+            0,
+        );
+
+        let mut idx = RankQuant::new(dim, bits);
+        let docs: Vec<f32> = (0..3 * dim).map(|i| (i % 7) as f32 - 3.0).collect();
+        idx.add(&docs);
+
+        let res = idx.search(&[], 2);
+        assert_rankquant_result_shape_and_order(
+            &format!("empty queries search bits={bits}"),
+            &res,
+            0,
+            2,
+            3,
+        );
+        let res = idx.search_asymmetric(&[], 2);
+        assert_rankquant_result_shape_and_order(
+            &format!("empty queries asymmetric bits={bits}"),
+            &res,
+            0,
+            2,
+            3,
+        );
+
+        let queries: Vec<f32> = (0..2 * dim).map(|i| (i % 5) as f32 - 2.0).collect();
+        let res = idx.search(&queries, usize::MAX);
+        assert_rankquant_result_shape_and_order(
+            &format!("huge k search bits={bits}"),
+            &res,
+            2,
+            3,
+            3,
+        );
+        let res = idx.search_asymmetric(&queries, usize::MAX);
+        assert_rankquant_result_shape_and_order(
+            &format!("huge k asymmetric bits={bits}"),
+            &res,
+            2,
+            3,
+            3,
+        );
+    }
+}
+
+#[test]
+fn rankquant_hotpath_search_ties_break_by_doc_id() {
+    let dim = 64;
+    let n = 6;
+    let docs = vec![0.0; n * dim];
+    let query = vec![0.0; dim];
+
+    for bits in [1u8, 2, 4] {
+        let mut idx = RankQuant::new(dim, bits);
+        idx.add(&docs);
+
+        let res = idx.search(&query, n);
+        assert_rankquant_result_shape_and_order(&format!("tie search bits={bits}"), &res, 1, n, n);
+        assert_eq!(res.indices_for_query(0), &[0, 1, 2, 3, 4, 5]);
+
+        let res = idx.search_asymmetric(&query, n);
+        assert_rankquant_result_shape_and_order(
+            &format!("tie asymmetric bits={bits}"),
+            &res,
+            1,
+            n,
+            n,
+        );
+        assert_eq!(res.indices_for_query(0), &[0, 1, 2, 3, 4, 5]);
+    }
+}
+
+#[test]
+fn rankquant_hotpath_search_constructor_valid_dims_keep_shapes() {
+    for &(dim, bits) in &[(8usize, 1u8), (20, 2), (36, 2), (48, 4), (80, 4)] {
+        let n = 5;
+        let nq = 3;
+        let mut rng = ChaCha8Rng::seed_from_u64(1_500 + dim as u64 * 8 + bits as u64);
+        let docs: Vec<f32> = (0..n * dim).map(|_| rng.random_range(-2.0..2.0)).collect();
+        let queries: Vec<f32> = (0..nq * dim).map(|_| rng.random_range(-2.0..2.0)).collect();
+
+        let mut idx = RankQuant::new(dim, bits);
+        idx.add(&docs);
+        assert_eq!(idx.len(), n);
+        assert_eq!(idx.dim(), dim);
+        assert_eq!(idx.bits(), bits);
+        assert_eq!(idx.byte_size(), n * idx.bytes_per_vec());
+
+        let res = idx.search(&queries, usize::MAX);
+        assert_rankquant_result_shape_and_order(
+            &format!("dim={dim} bits={bits} search"),
+            &res,
+            nq,
+            n,
+            n,
+        );
+        let res = idx.search_asymmetric(&queries, usize::MAX);
+        assert_rankquant_result_shape_and_order(
+            &format!("dim={dim} bits={bits} asymmetric"),
+            &res,
+            nq,
+            n,
+            n,
+        );
+    }
 }
 
 #[test]
