@@ -924,8 +924,8 @@ impl Bitmap {
         let ids = as_u32_ids_1d(doc_ids, "doc id")?;
         let ids_slice = ids.as_slice()?;
         check_ids_in_range(ids_slice, self.inner.len(), "doc id")?;
-        let (scores, ids) = py.detach(|| self.inner.search_subset(q_slice, ids_slice, k));
-        Ok((scores.into_pyarray(py), ids.into_pyarray(py)))
+        let (scores, out_ids) = py.detach(|| self.inner.search_subset(q_slice, ids_slice, k));
+        Ok((scores.into_pyarray(py), out_ids.into_pyarray(py)))
     }
 
     /// Return top-`m` candidate doc IDs for a single query as a 1-D `uint32`

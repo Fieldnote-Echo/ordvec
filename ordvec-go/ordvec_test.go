@@ -121,6 +121,34 @@ func TestLoadInfoSearchRankQuant(t *testing.T) {
 	}
 }
 
+func TestProbeRankQuantInfo(t *testing.T) {
+	path := writeRankQuantFixture(t)
+
+	probed, err := Probe(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probed.Kind != KindRankQuant || probed.Dim != 16 || probed.BitWidth != 2 || probed.VectorCount != 4 {
+		t.Fatalf("unexpected probed info: %+v", probed)
+	}
+	if probed.BytesPerVec != 4 || probed.SourceFileSizeBytes == 0 {
+		t.Fatalf("unexpected probed byte metadata: %+v", probed)
+	}
+
+	idx, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+	loaded, err := idx.Info()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if probed != loaded {
+		t.Fatalf("probe/load metadata mismatch: probe=%+v load=%+v", probed, loaded)
+	}
+}
+
 func TestRankQuantSubsetSearchOrdersByRowID(t *testing.T) {
 	idx, err := Load(writeRankQuantFixture(t))
 	if err != nil {

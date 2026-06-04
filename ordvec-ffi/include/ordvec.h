@@ -186,6 +186,22 @@ void ordvec_search_stats_init(ordvec_search_stats_t *stats);
 ordvec_status_t ordvec_index_load(const char *path, uint64_t flags, ordvec_index_t **out);
 
 /**
+ * Probe on-disk metadata for a `.tvrq` RankQuant or `.tvbm` Bitmap index
+ * without loading payload rows into an index handle.
+ *
+ * This validates the fixed header, declared dimensions, payload byte count,
+ * and exact file length. Full row-invariant validation remains the job of
+ * `ordvec_index_load`.
+ *
+ * # Safety
+ *
+ * `path` must be a non-null, NUL-terminated, valid UTF-8 C string. `info_out`
+ * must be non-null, initialized with `ordvec_index_info_init`, and point to
+ * writable memory for `ordvec_index_info_t`.
+ */
+ordvec_status_t ordvec_index_probe(const char *path, uint64_t flags, ordvec_index_info_t *info_out);
+
+/**
  * Copy metadata from a loaded index into `info_out`.
  *
  * # Safety
