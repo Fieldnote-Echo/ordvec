@@ -22,6 +22,7 @@ use ordvec::{RankQuant, SearchResults};
 const DIMS_B1: &[usize] = &[8, 16, 32, 48, 64, 80, 128];
 const DIMS_B2: &[usize] = &[8, 16, 20, 32, 36, 48, 64, 80, 128];
 const DIMS_B4: &[usize] = &[16, 32, 48, 64, 80, 128];
+const MAX_PAYLOAD_BYTES: usize = 4096;
 
 #[derive(Debug)]
 struct HotPathCase {
@@ -56,7 +57,8 @@ impl<'a> Arbitrary<'a> for HotPathCase {
             _ => k_seed,
         };
         let value_mode: u8 = raw.int_in_range(0..=3)?;
-        let payload = raw.bytes(raw.len())?.to_vec();
+        let max_payload = ((n + nq) * dim).min(MAX_PAYLOAD_BYTES);
+        let payload = raw.bytes(raw.len().min(max_payload))?.to_vec();
 
         Ok(Self {
             bits,
