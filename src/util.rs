@@ -474,6 +474,22 @@ impl TopK {
     /// user-requested `k`; positions beyond `self.filled` are left as
     /// sentinels.
     pub(crate) fn finalize_into(&self, out_scores: &mut [f32], out_indices: &mut [i64]) {
+        self.finalize_with_score_offset_into(out_scores, out_indices, 0.0);
+    }
+
+    /// Drain into `out_scores` / `out_indices`, applying a query-constant score
+    /// offset before the final `(score desc, tie_key asc)` ordering.
+    ///
+    /// SIMD RankQuant asymmetric kernels drop a query-constant centre term from
+    /// the hot loop and re-apply it at finalize time. Adding that offset can
+    /// collapse two distinct finite `f32` scores into one visible output score,
+    /// so the public tie order must be computed after the offset is applied.
+    pub(crate) fn finalize_with_score_offset_into(
+        &self,
+        out_scores: &mut [f32],
+        out_indices: &mut [i64],
+        score_offset: f32,
+    ) {
         debug_assert_eq!(out_scores.len(), out_indices.len());
         for s in out_scores.iter_mut() {
             *s = f32::NEG_INFINITY;
@@ -488,7 +504,7 @@ impl TopK {
             .zip(self.tie_keys.iter())
             .enumerate()
             .take(self.filled)
-            .map(|(slot, ((&s, &i), &tie_key))| (s, i, tie_key, slot))
+            .map(|(slot, ((&s, &i), &tie_key))| (s + score_offset, i, tie_key, slot))
             .collect();
         // Composite key: score descending, then tie key ascending. The kept
         // slot is only a final deterministic tie-break when duplicate
@@ -576,6 +592,20 @@ mod tests {
 
         assert_eq!(scores, [0.0, 0.0]);
         assert_eq!(indices, [0, 1]);
+    }
+
+    #[test]
+    fn topk_offset_sort_uses_visible_score_ties() {
+        let mut top = TopK::new_with_tie_keys(2, &[10, 5]);
+        top.maybe_insert(1.0 + f32::EPSILON, 0);
+        top.maybe_insert(1.0, 1);
+
+        let mut scores = [f32::NEG_INFINITY; 2];
+        let mut indices = [-1; 2];
+        top.finalize_with_score_offset_into(&mut scores, &mut indices, 100_000_000.0);
+
+        assert_eq!(scores, [100_000_000.0, 100_000_000.0]);
+        assert_eq!(indices, [1, 0]);
     }
 
     #[test]

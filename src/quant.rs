@@ -397,25 +397,16 @@ impl RankQuant {
                     &mut top,
                 );
 
-                top.finalize_into(out_scores, out_indices);
-
                 if centre_drop_used {
                     // The asym kernels drop the per-lane `- centre` term from
-                    // the hot loop; it is a query-constant shift, re-applied
-                    // here. Guarded by `is_finite` so it lands only on filled
-                    // slots: when fewer than `k` docs were scored the trailing
-                    // top-k positions stay at the `f32::NEG_INFINITY` sentinel,
-                    // and `NEG_INFINITY + offset` would wrongly turn a sentinel
-                    // into a finite score. (Real scores are always finite — the
-                    // finite-input policy guarantees it — so the guard only ever
-                    // skips sentinels, never a genuine result.)
+                    // the hot loop; apply the query-constant shift before the
+                    // final visible-score sort so rounding-collapse ties still
+                    // use the public row-id tie key.
                     let q_sum: f32 = q_unit.iter().sum();
                     let offset = -centre * q_sum * inv_norm;
-                    for s in out_scores.iter_mut() {
-                        if s.is_finite() {
-                            *s += offset;
-                        }
-                    }
+                    top.finalize_with_score_offset_into(out_scores, out_indices, offset);
+                } else {
+                    top.finalize_into(out_scores, out_indices);
                 }
 
                 let _ = bytes_per_vec; // shape clarity
@@ -659,17 +650,13 @@ impl RankQuant {
 
         let mut scores = vec![f32::NEG_INFINITY; k_eff];
         let mut local_indices = vec![-1i64; k_eff];
-        top.finalize_into(&mut scores, &mut local_indices);
         if centre_drop_used {
             // Re-apply the per-query centre shift dropped from the kernel hot
-            // loop; the `is_finite` guard skips unfilled top-k slots (still at
-            // the `f32::NEG_INFINITY` sentinel) so a sentinel never becomes a
-            // finite score. See the matching note in `search_asymmetric`.
-            for s in scores.iter_mut() {
-                if s.is_finite() {
-                    *s += centre_offset;
-                }
-            }
+            // loop before final sorting so visible-score ties are still ordered
+            // by global row ID.
+            top.finalize_with_score_offset_into(&mut scores, &mut local_indices, centre_offset);
+        } else {
+            top.finalize_into(&mut scores, &mut local_indices);
         }
         // Map local → global doc IDs.
         let global_indices: Vec<i64> = local_indices
