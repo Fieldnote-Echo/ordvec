@@ -22,9 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Documentation
 
 - Added a pre-1.0 compatibility policy covering stable and experimental Rust
-  APIs, Python bindings, repo-local C/Go/Manifest sidecars, primitive persisted
-  formats, examples/docs, MSRV/feature changes, and release-note review
-  expectations.
+  APIs, Python bindings, the lockstep Manifest crate, repo-local C/Go sidecars,
+  primitive persisted formats, examples/docs, MSRV/feature changes, and
+  release-note review expectations.
 
 ### Security
 
@@ -40,10 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Added `probe_index_metadata` to inspect persisted `Rank`, `RankQuant`,
   `Bitmap`, and `SignBitmap` headers without allocating payloads.
-- Added the repo-local, publish=false `ordvec-manifest` crate with a strict v1
-  JSON schema, artifact and row-identity verification, attestation shape
-  checks, a CLI, and optional SQLite cache/audit support with one active
-  manifest pointer.
+- Added the lockstep `ordvec-manifest` crate with a strict v1 JSON schema,
+  artifact and row-identity verification, attestation shape checks, a CLI, and
+  optional SQLite cache/audit support with one active manifest pointer.
 - Added optional typed calibration profile references to the v1 manifest
   schema, with path/hash/identity/compatibility verification but no statistical
   computation.
