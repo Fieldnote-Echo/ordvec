@@ -1038,6 +1038,8 @@ jobs:
             exit 1
           fi
           echo "OK: byte-identity verified ($A_SHA)"
+      - name: Validate manifest publish dry-run
+        run: cargo publish -p ordvec-manifest --dry-run --locked
       - name: Mint a short-lived crates.io credential (OIDC)
         id: auth
         uses: rust-lang/crates-io-auth-action@bbd81622f20ce9e2dd9622e3218b975523e45bbe # v1.0.4
