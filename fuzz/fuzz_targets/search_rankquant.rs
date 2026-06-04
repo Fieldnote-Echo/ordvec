@@ -114,7 +114,7 @@ fn assert_score_then_id_order(label: &str, qi: usize, scores: &[f32], ids: &[i64
         let prev = (scores[slot - 1], ids[slot - 1]);
         let cur = (scores[slot], ids[slot]);
         assert!(
-            cur.0 < prev.0 || (cur.0 == prev.0 && cur.1 >= prev.1),
+            cur.0 < prev.0 || (cur.0 == prev.0 && cur.1 > prev.1),
             "{label}: row {qi} violates score-desc/doc-id-asc order at slots {} and {slot}",
             slot - 1,
         );
