@@ -454,6 +454,8 @@ def check_release_security_gates(workflow: dict[str, Any], path: str) -> None:
         )
 
     top_permissions = workflow.get("permissions")
+    if top_permissions is not None and not isinstance(top_permissions, dict):
+        fail(f"{path}: workflow permissions must be an explicit mapping, not {top_permissions!r}")
     if isinstance(top_permissions, dict) and top_permissions.get("id-token") == "write":
         fail(f"{path}: id-token: write must be scoped to explicit signing/publishing jobs, not workflow-wide")
 
@@ -492,6 +494,8 @@ def check_release_security_gates(workflow: dict[str, Any], path: str) -> None:
             continue
         job = mapping(raw_job, f"{path}: jobs.{job_name}")
         permissions = job.get("permissions")
+        if permissions is not None and not isinstance(permissions, dict):
+            fail(f"{path}: jobs.{job_name}.permissions must be an explicit mapping, not {permissions!r}")
         if not isinstance(permissions, dict):
             continue
         id_token = permissions.get("id-token")
