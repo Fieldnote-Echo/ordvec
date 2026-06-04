@@ -151,6 +151,7 @@ def split_inline_table(value: str) -> list[str]:
     quote: str | None = None
     escaped = False
     bracket_depth = 0
+    brace_depth = 0
     for index, char in enumerate(value):
         if escaped:
             escaped = False
@@ -170,7 +171,13 @@ def split_inline_table(value: str) -> list[str]:
         if char == "]" and quote is None and bracket_depth > 0:
             bracket_depth -= 1
             continue
-        if char == "," and quote is None and bracket_depth == 0:
+        if char == "{" and quote is None:
+            brace_depth += 1
+            continue
+        if char == "}" and quote is None and brace_depth > 0:
+            brace_depth -= 1
+            continue
+        if char == "," and quote is None and bracket_depth == 0 and brace_depth == 0:
             parts.append(value[start:index].strip())
             start = index + 1
     parts.append(value[start:].strip())
@@ -210,7 +217,7 @@ def minimal_load_toml(path: str) -> dict[str, Any]:
         if not line:
             continue
         if multiline_array is not None:
-            closes = line == "]" or line.endswith("]")
+            closes = line == "]" or (line.endswith("]") and line.count("]") > line.count("["))
             if closes:
                 line = line[:-1].strip()
             if line.endswith(","):
@@ -242,6 +249,30 @@ def minimal_load_toml(path: str) -> dict[str, Any]:
     if multiline_array is not None:
         raise ValueError(f"{path}: unterminated multiline array")
     return data
+
+
+def read_toml_string_in_section(path: str, section: str, key: str) -> str:
+    current_section: str | None = None
+    for lineno, raw_line in enumerate(read_text(path).splitlines(), start=1):
+        line = strip_toml_comment(raw_line).strip()
+        if not line:
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            if line.startswith("[["):
+                current_section = None
+            else:
+                current_section = line[1:-1].strip()
+            continue
+        if current_section != section:
+            continue
+        raw_key, separator, value = line.partition("=")
+        if not separator or raw_key.strip() != key:
+            continue
+        parsed = parse_toml_value(value)
+        if not isinstance(parsed, str):
+            raise ValueError(f"{path}:{lineno}: {section}.{key} must be a string")
+        return parsed
+    raise ValueError(f"{path}: missing {section}.{key}")
 
 
 def load_toml(path: str) -> dict[str, Any]:
@@ -453,9 +484,10 @@ def check_python_package_metadata() -> None:
 
 
 def check_strict_release_tag_patterns(workflow: dict[str, Any], path: str) -> None:
-    cliff = load_toml("cliff.toml")
-    git = mapping(cliff.get("git"), "cliff.toml: git")
-    tag_pattern = git.get("tag_pattern")
+    try:
+        tag_pattern = read_toml_string_in_section("cliff.toml", "git", "tag_pattern")
+    except ValueError as exc:
+        fail(str(exc))
     if tag_pattern != STRICT_STABLE_TAG_PATTERN:
         fail(
             "cliff.toml: git.tag_pattern must match release.yml's strict stable "
