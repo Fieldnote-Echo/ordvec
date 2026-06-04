@@ -10,10 +10,10 @@
 set -euo pipefail
 fail() { echo "::error::release-publish invariant violated: $*"; exit 1; }
 
-# Both generated SBOMs must be gitignored. A tracked/untracked *.cdx.json
+# Generated SBOMs must be gitignored. A tracked/untracked *.cdx.json
 #     makes `cargo publish` refuse the dirty tree and would otherwise bundle
 #     the SBOM into the .crate.
-for f in ordvec.cdx.json ordvec-python/ordvec-python.cdx.json; do
+for f in ordvec.cdx.json ordvec-manifest/ordvec-manifest.cdx.json ordvec-python/ordvec-python.cdx.json; do
   git check-ignore -q -- "$f" || fail "$f is not gitignored (it is a generated SBOM artifact)"
 done
 

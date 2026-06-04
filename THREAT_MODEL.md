@@ -307,14 +307,16 @@ trust model requires be pinned by version *tag*); `persist-credentials: false`
 on every checkout; `permissions: contents: read` default. The **release
 workflow** (`release.yml`) is tag-triggered with a strict-SemVer guard; build,
 GitHub attestation, SLSA provenance, Release-asset attach, and un-draft all
-run automatically, while the **`crates.io`** and **`pypi`** publishes are
-gated behind GitHub Environments with **Required reviewers** (the only manual
-step). It runs a `require-ci-green` gate against `main`, publishes via **OIDC
-trusted publishing** (no long-lived registry tokens), and emits **SLSA build
+run automatically, while the two **`crates.io`** publish jobs (`ordvec` first,
+then lockstep `ordvec-manifest`) and the **`pypi`** publish job are gated
+behind GitHub Environments with **Required reviewers** (the only manual step).
+It runs a `require-ci-green` gate against `main`, publishes via **OIDC trusted
+publishing** (no long-lived registry tokens), and emits **SLSA build
 provenance** (`actions/attest-build-provenance` + a `slsa-github-generator`
 `*.intoto.jsonl` attached to the GitHub Release) **before** publish — a failed
-attestation fails the release closed. PyPI additionally gets **PEP 740**
-attestations via Trusted Publishing.
+attestation fails the release closed. Each Rust publish job proves pre- and
+post-publish crates.io byte identity against the attested `.crate`; PyPI
+additionally gets **PEP 740** attestations via Trusted Publishing.
 
 **Static / supply-chain analysis:** **CodeQL** scans Rust, Python, and Actions
 (no-build databases); **OpenSSF Scorecard** publishes SARIF to code scanning
@@ -336,7 +338,7 @@ branch-only allowlist would deadlock publishing — see RELEASING.md). The
 push-event CI run on `main`, and `main` itself is branch-protected (PR review,
 no force-push) — so a release cannot be cut from an unmerged or attacker
 branch, and no publish runs without an explicit human approval. The remaining residual is *maintainer-account compromise*: a
-single owner both cuts the release tag and approves both publishes, so account takeover (or social
+single owner both cuts the release tag and approves all publishes, so account takeover (or social
 engineering) is not caught by a second human. *Mitigations:* strong 2FA /
 passkeys on the maintainer account; recruiting a **second owner/maintainer**
 (also an open OpenSSF Best-Practices item) — which would additionally make a
@@ -517,10 +519,11 @@ x86_64/aarch64 unsafe paths (SIMD-004).
    in the Rust and Python API docs (THREAT-QUERY-001).
 
 **Later (not release blockers):** a second maintainer/owner (then a release
-wait timer becomes meaningful); an optional sidecar index verifier
-(`ordvec verify` / external HMAC/BLAKE3 manifest) if a deployment requires
-tamper-evidence (DESER-002); a `safe_copy=True` FFI isolation option
-(FFI-001); layering ASAN onto the Intel SDE AVX-512 leg.
+wait timer becomes meaningful); stronger deployment-specific manifest
+trust-policy UX such as external signatures/HMACs if a deployment requires
+tamper-evidence beyond `ordvec-manifest`'s hash-bound sidecar verification
+(DESER-002); a `safe_copy=True` FFI isolation option (FFI-001); layering ASAN
+onto the Intel SDE AVX-512 leg.
 
 ---
 

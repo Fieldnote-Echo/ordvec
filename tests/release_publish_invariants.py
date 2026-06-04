@@ -326,33 +326,46 @@ def check_publish_pypi(workflow: dict[str, Any], path: str) -> None:
             fail(f"{path}: {label} must not place non-canonical artifacts in dist")
 
 
-def check_publish_crate(workflow: dict[str, Any], path: str) -> None:
+def check_publish_crate_job(
+    workflow: dict[str, Any], path: str, job_name: str, package: str, artifact_name: str
+) -> None:
     jobs = mapping(workflow.get("jobs"), f"{path}: jobs")
-    job = mapping(jobs.get("publish-crate"), f"{path}: jobs.publish-crate")
-    steps = sequence(job.get("steps"), f"{path}: jobs.publish-crate.steps")
+    job = mapping(jobs.get(job_name), f"{path}: jobs.{job_name}")
+    steps = sequence(job.get("steps"), f"{path}: jobs.{job_name}.steps")
 
     crate_downloads: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
+    package_runs: list[str] = []
+    publish_runs: list[str] = []
 
     for index, raw_step in enumerate(steps):
-        step = mapping(raw_step, f"{path}: jobs.publish-crate.steps[{index}]")
-        if action_name(step) != "actions/download-artifact":
-            continue
-        with_block = step.get("with", {})
-        with_map = mapping(with_block, f"{path}: {step_label(index, step)} with")
-        if with_map.get("name") == "dist-crate":
-            crate_downloads.append((index, step, with_map))
+        step = mapping(raw_step, f"{path}: jobs.{job_name}.steps[{index}]")
+        run = step.get("run")
+        if isinstance(run, str):
+            if f"cargo package -p {package} --locked" in run:
+                package_runs.append(run)
+            if f"cargo publish -p {package} --locked" in run:
+                publish_runs.append(run)
+        if action_name(step) == "actions/download-artifact":
+            with_block = step.get("with", {})
+            with_map = mapping(with_block, f"{path}: {step_label(index, step)} with")
+            if with_map.get("name") == artifact_name:
+                crate_downloads.append((index, step, with_map))
 
     if len(crate_downloads) != 1:
-        fail(f"{path}: publish-crate must download exactly one dist-crate artifact")
+        fail(f"{path}: {job_name} must download exactly one {artifact_name} artifact")
 
     index, step, with_map = crate_downloads[0]
     label = step_label(index, step)
     artifact_path = norm_path(with_map.get("path"))
     if artifact_path != "${{ runner.temp }}/attested":
         fail(
-            f"{path}: {label} downloads dist-crate to {artifact_path or 'the default path'!r}; "
+            f"{path}: {label} downloads {artifact_name} to {artifact_path or 'the default path'!r}; "
             "it must use ${{ runner.temp }}/attested so cargo package sees a clean checkout"
         )
+    if len(package_runs) != 1:
+        fail(f"{path}: {job_name} must run exactly one `cargo package -p {package} --locked`")
+    if len(publish_runs) != 1:
+        fail(f"{path}: {job_name} must run exactly one `cargo publish -p {package} --locked`")
 
     verify_step_names = {
         "Verify byte-identity vs the attested .crate",
@@ -361,52 +374,70 @@ def check_publish_crate(workflow: dict[str, Any], path: str) -> None:
     verify_steps: list[dict[str, Any]] = []
     found_names: set[str] = set()
     for index, raw_step in enumerate(steps):
-        step = mapping(raw_step, f"{path}: jobs.publish-crate.steps[{index}]")
+        step = mapping(raw_step, f"{path}: jobs.{job_name}.steps[{index}]")
         name = step.get("name")
         if name in verify_step_names:
             verify_steps.append(step)
             found_names.add(name)
     if found_names != verify_step_names:
-        fail(f"{path}: publish-crate must have both attested .crate verification steps")
+        fail(f"{path}: {job_name} must have both attested .crate verification steps")
 
+    attested_path = f"${{RUNNER_TEMP}}/attested/{package}-${{VERSION}}.crate"
     for step in verify_steps:
         name = step.get("name")
         run = step.get("run")
         if not isinstance(run, str):
-            fail(f"{path}: publish-crate step {name!r} must be a run step")
-        if "${RUNNER_TEMP}/attested/ordvec-${VERSION}.crate" not in run:
+            fail(f"{path}: {job_name} step {name!r} must be a run step")
+        if attested_path not in run:
             fail(
-                f"{path}: publish-crate step {name!r} must read the attested .crate "
-                "from ${RUNNER_TEMP}/attested"
+                f"{path}: {job_name} step {name!r} must read the attested .crate "
+                f"from {attested_path}"
             )
         if name == "Post-publish byte-identity (download from crates.io == attested)":
             if "/tmp/published.crate" in run:
-                fail(f"{path}: publish-crate post-publish readback must not write to /tmp")
+                fail(f"{path}: {job_name} post-publish readback must not write to /tmp")
             if not (
                 "${RUNNER_TEMP}/published.crate" in run or "$RUNNER_TEMP/published.crate" in run
             ):
-                fail(f"{path}: publish-crate post-publish readback must write under ${{RUNNER_TEMP}}")
+                fail(f"{path}: {job_name} post-publish readback must write under ${{RUNNER_TEMP}}")
             version = r"\$(?:\{VERSION\}|VERSION)"
             if not has_assignment(
-                run, "API_URL", rf"https://crates\.io/api/v1/crates/ordvec/{version}/download"
+                run, "API_URL", rf"https://crates\.io/api/v1/crates/{package}/{version}/download"
             ):
-                fail(f"{path}: publish-crate post-publish readback must define the crates.io API URL")
+                fail(f"{path}: {job_name} post-publish readback must define the crates.io API URL")
             if not has_assignment(
-                run, "STATIC_URL", rf"https://static\.crates\.io/crates/ordvec/ordvec-{version}\.crate"
+                run,
+                "STATIC_URL",
+                rf"https://static\.crates\.io/crates/{package}/{package}-{version}\.crate",
             ):
-                fail(f"{path}: publish-crate post-publish readback must define the static.crates.io fallback")
+                fail(f"{path}: {job_name} post-publish readback must define the static.crates.io fallback")
 
             curl_commands = shell_curl_commands(run)
             if not any(readback_curl_uses(words, "API_URL") for words in curl_commands):
                 fail(
-                    f"{path}: publish-crate post-publish readback must curl $API_URL "
+                    f"{path}: {job_name} post-publish readback must curl $API_URL "
                     "with CRATES_IO_USER_AGENT into $PUBLISHED"
                 )
             if not any(readback_curl_uses(words, "STATIC_URL") for words in curl_commands):
                 fail(
-                    f"{path}: publish-crate post-publish readback must curl $STATIC_URL "
+                    f"{path}: {job_name} post-publish readback must curl $STATIC_URL "
                     "with CRATES_IO_USER_AGENT into $PUBLISHED"
                 )
+
+
+def check_publish_crates(workflow: dict[str, Any], path: str) -> None:
+    jobs = mapping(workflow.get("jobs"), f"{path}: jobs")
+    manifest_job = mapping(jobs.get("publish-manifest-crate"), f"{path}: jobs.publish-manifest-crate")
+    if not has_need(manifest_job, "publish-crate"):
+        fail(f"{path}: publish-manifest-crate must need publish-crate so ordvec publishes first")
+    check_publish_crate_job(workflow, path, "publish-crate", "ordvec", "dist-crate")
+    check_publish_crate_job(
+        workflow,
+        path,
+        "publish-manifest-crate",
+        "ordvec-manifest",
+        "dist-manifest-crate",
+    )
 
 
 def main() -> None:
@@ -414,7 +445,7 @@ def main() -> None:
     check_hash_requirement_temp_paths([WORKFLOW_PATH, PYTHON_WORKFLOW_PATH])
     check_aarch64_smoke_selector(workflow, WORKFLOW_PATH)
     check_pypi_canonical_dist(workflow, WORKFLOW_PATH)
-    check_publish_crate(workflow, WORKFLOW_PATH)
+    check_publish_crates(workflow, WORKFLOW_PATH)
     check_publish_pypi(workflow, WORKFLOW_PATH)
 
 

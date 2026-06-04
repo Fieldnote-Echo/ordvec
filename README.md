@@ -174,8 +174,8 @@ candidate slices passed to `Search` until the call returns.
   [`docs/determinism.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/determinism.md),
   [`THREAT_MODEL.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/THREAT_MODEL.md)
 - **Manifest verifier, C ABI, and Go wrapper:**
-  `ordvec-manifest` is versioned in lockstep with the core crate and is
-  package-gated separately; use the GitHub checkout for `ordvec-ffi/`,
+  `ordvec-manifest` is versioned and published in lockstep with the core crate
+  through its own package gate; use the GitHub checkout for `ordvec-ffi/`,
   `ordvec-go/`, and
   [`docs/c-api.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/c-api.md).
 - **Pre-1.0 compatibility policy:**
