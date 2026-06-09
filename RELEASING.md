@@ -1,17 +1,18 @@
 # Releasing `ordvec`
 
-> **Publish is held.** A real `cargo publish` / PyPI publish happens only on
+> **Publish is held.** A real crates.io / PyPI publish happens only on
 > the maintainer's explicit approval. CI never publishes — the unified release
 > pipeline builds, attests, and attaches everything to the GitHub Release
 > automatically on a tag push, then **waits at the `crates-io` and `pypi`
-> environment gates** for a required-reviewer approval before either registry
+> environment gates** for a required-reviewer approval before any registry
 > push.
 
-`ordvec` (the Rust crate) and `ordvec` on PyPI (the PyO3 wheel built from
-`ordvec-python/`) are released by **pushing a `vMAJOR.MINOR.PATCH` tag** to a
-commit on `main`. The release workflow handles build, canonical Python artifact
-selection, attestation, SLSA provenance, Release-asset attach, and un-draft
-automatically; only the two registry gates are manual.
+`ordvec` (the Rust crate), `ordvec-manifest` (the lockstep manifest verifier
+crate), and `ordvec` on PyPI (the PyO3 wheel built from `ordvec-python/`) are
+released by **pushing a `vMAJOR.MINOR.PATCH` tag** to a commit on `main`. The
+release workflow handles build, canonical Python artifact selection,
+attestation, SLSA provenance, Release-asset attach, and un-draft automatically;
+only the registry environment approvals are manual.
 
 ## Release pipeline controls
 
@@ -24,7 +25,7 @@ The unified `release.yml`:
   `main` for the tagged SHA — `ci.yml`, `python.yml`, `fuzz.yml`, `codeql.yml`
   (a *successful* run for that exact SHA on `main`);
 - publishes via **OIDC trusted publishing** (no long-lived crates.io / PyPI
-  tokens in the repo);
+  tokens in the repo) for both Rust crates and the Python distribution;
 - canonicalizes the Python dist before attestation and release upload: for a
   new PyPI version it uses the current run's wheels/sdist; if PyPI already owns
   that immutable version during recovery, it downloads the exact PyPI-served
@@ -35,31 +36,41 @@ The unified `release.yml`:
   **before** the gated publishes — a failed attestation fails the release
   closed, so nothing ships without provenance recorded. In recovery mode where
   PyPI files already exist, the GitHub/SLSA subjects are deliberately limited
-  to the crate built by the current run; the Python files are verified immutable
-  PyPI bytes from the earlier Trusted Publishing upload, not falsely claimed as
-  rebuilt by the recovery run;
-- stages the **`.crate`, canonical wheels, canonical sdist, `*.sigstore.json` bundle, and
-  `*.intoto.jsonl` provenance** on the GitHub Release while it is still **a
+  to the Rust crates built by the current run; the Python files are verified
+  immutable PyPI bytes from the earlier Trusted Publishing upload, not falsely
+  claimed as rebuilt by the recovery run;
+- stages the **`.crate` files, canonical wheels, canonical sdist,
+  `*.sigstore.json` bundle, and `*.intoto.jsonl` provenance** on the GitHub Release while it is still **a
   DRAFT** (`release-assets-draft` is the sole Release-asset writer — no manual
   attach, which is what v0.2.0's manual step missed);
-- proves **byte-identity** in `publish-crate` on both sides of `cargo publish`:
+- proves **byte-identity** in `publish-crate` and `publish-manifest-crate` on
+  both sides of `cargo publish`:
     1. **pre-publish gate** — downloads the SLSA-attested `.crate` artifact,
        re-packages with `--locked`, and `sha256`-compares before minting the
        crates.io OIDC token. Defends against toolchain drift / deterministic-
        packaging regression; if they differ, fails closed **before** the
        token is minted (nothing reaches crates.io);
     2. **post-publish empirical proof** — downloads the just-published `.crate`
-       from `crates.io/api/v1/crates/ordvec/<v>/download` and `sha256`-compares
-       to the attested artifact. `cargo publish` runs its own internal
-       packaging step the pre-publish gate cannot inspect; this is the only
-       check that proves the bytes crates.io actually serves equal the SLSA-
-       attested bytes. A mismatch fails closed, so `publish-github-release`
-       never un-drafts the Release (the version is then yank-only on
-       crates.io, but the failure is loudly observable);
-- **un-drafts the GitHub Release ONLY after BOTH `publish-crate` AND
-  `publish-pypi` succeed** (`publish-github-release` is the sole un-draft
-  point). If either publish fails or is skipped, the Release stays DRAFT — no
-  public Release ever exists for a version the registries refused;
+       from `crates.io/api/v1/crates/<crate>/<v>/download` and
+       `sha256`-compares to the attested artifact. `cargo publish` runs its own
+       internal packaging step the pre-publish gate cannot inspect; this is the
+       only check that proves the bytes crates.io actually serves equal the
+       SLSA-attested bytes. A mismatch fails closed, so
+       `publish-github-release` never un-drafts the Release (the version is
+       then yank-only on crates.io, but the failure is loudly observable);
+- publishes `ordvec-manifest` only after the lockstep `ordvec` crate has
+  published and passed its crates.io-served byte-identity readback. The
+  pre-publish manifest `.crate` artifact is created with `cargo package
+  --no-verify` because Cargo cannot verify a lockstep dependency version before
+  `ordvec` exists on crates.io; `publish-manifest-crate` then runs the normal
+  verified `cargo package -p ordvec-manifest --locked` after `ordvec` is
+  published and byte-compares that output to the attested artifact before
+  minting its own OIDC token;
+- **un-drafts the GitHub Release ONLY after `publish-crate`,
+  `publish-manifest-crate`, AND `publish-pypi` succeed**
+  (`publish-github-release` is the sole un-draft point). If any publish fails
+  or is skipped, the Release stays DRAFT — no public Release ever exists for a
+  version the registries refused;
 - pins every third-party action by **commit SHA** (the one mandated exception
   is the SLSA reusable workflow, tag-pinned per SLSA's trust model), sets
   `persist-credentials: false`, and defaults to `permissions: contents: read`.
@@ -93,11 +104,15 @@ the GitHub Release.
 ### Trusted-publisher configuration (one-time, in the registries)
 
 The crates.io and PyPI Trusted Publisher records must point at this workflow
-filename. Until either is updated, the corresponding gated publish fails
+filename. Until a record is updated, the corresponding gated publish fails
 **closed** at the OIDC exchange (no risk of a bad publish; just a failed run).
 
 - **crates.io** → `ordvec` → Settings → Trusted Publishing → GitHub publisher:
   `workflow = release.yml`, `environment = crates-io`.
+- **crates.io** → `ordvec-manifest` → Settings → Trusted Publishing → GitHub
+  publisher: `workflow = release.yml`, `environment = crates-io`. If crates.io
+  requires an initial owner bootstrap before a new crate's Trusted Publisher can
+  be configured, do that explicit maintainer-approved bootstrap before tagging.
 - **PyPI** → `ordvec` → Publishing → GitHub publisher: `workflow = release.yml`,
   `environment = pypi`.
 
@@ -167,8 +182,9 @@ filename. Until either is updated, the corresponding gated publish fails
 
    This verifies the GitHub Environments still require the expected reviewer
    and accept only the stable release tag pattern. Separately verify the
-   registry Trusted Publisher records by hand: crates.io must point to
-   `release.yml` / `crates-io`, and PyPI must point to `release.yml` / `pypi`.
+   registry Trusted Publisher records by hand: crates.io must point both
+   `ordvec` and `ordvec-manifest` to `release.yml` / `crates-io`, and PyPI must
+   point `ordvec` to `release.yml` / `pypi`.
 6. Get the maintainer's explicit go to publish.
 7. Push the version tag from `main` (signed):
 
@@ -177,30 +193,32 @@ filename. Until either is updated, the corresponding gated publish fails
    git push origin vX.Y.Z
    ```
 
-   `release.yml` triggers automatically. It builds the `.crate`, wheels, and
-   sdist; selects the canonical Python dist (current build for a new PyPI
-   version, verified PyPI bytes for an existing immutable version); attests the
-   files this run can honestly attest (GitHub attestation store +
+   `release.yml` triggers automatically. It builds the two `.crate` files,
+   wheels, and sdist; selects the canonical Python dist (current build for a
+   new PyPI version, verified PyPI bytes for an existing immutable version);
+   attests the files this run can honestly attest (GitHub attestation store +
    `*.sigstore.json`); generates the SLSA `*.intoto.jsonl`; and stages every
    artifact, the attestation bundle, and the provenance on the GitHub Release
-   — **as a DRAFT**. It then pauses at the two registry environment gates.
-8. **Approve the two publish environments** when they pause in the Actions UI
-   (one for `crates-io`, one for `pypi`). The required-reviewer approval is
-   what authorises the registry push.
-   - `publish-crate` first sha256-compares its repackaged `.crate` to the
-     SLSA-attested artifact — if they diverge (toolchain drift, etc.) the job
-     fails closed BEFORE the OIDC token is minted, so nothing reaches
-     crates.io. Re-run / investigate.
-   - Once **both** registry gates succeed, `publish-github-release` un-drafts
-     the GitHub Release automatically. If one gate fails, the Release stays
-     DRAFT — investigate and re-run from a fixed workflow rather than approving
-     the other registry into another partial state.
+   — **as a DRAFT**. It then pauses at the registry environment gates.
+8. **Approve each publish environment pause** in the Actions UI. There are
+   three registry publish jobs: `publish-crate`, `publish-manifest-crate`, and
+   `publish-pypi`. The two crates.io jobs use the same `crates-io` environment
+   and may require separate approvals; PyPI uses the `pypi` environment.
+   Required-reviewer approval is what authorises each registry push.
+   - `publish-crate` and `publish-manifest-crate` first sha256-compare their
+     repackaged `.crate` to the SLSA-attested artifact — if either diverges
+     (toolchain drift, etc.) the job fails closed BEFORE the OIDC token is
+     minted, so nothing reaches crates.io. Re-run / investigate.
+   - Once **all** registry publish jobs succeed, `publish-github-release`
+     un-drafts the GitHub Release automatically. If one gate fails, the Release
+     stays DRAFT — investigate and re-run from a fixed workflow rather than
+     approving another registry into a partial state.
    - `publish-pypi` either uploads the fresh canonical dist or, if PyPI already
      serves that version, skips upload and verifies the existing files. In both
      modes it compares every PyPI-served wheel/sdist SHA-256 digest against the
      canonical `dist/` files before the GitHub Release can un-draft.
 9. Verify each published artifact and its provenance:
-   - crates.io / docs.rs;
+   - crates.io / docs.rs for `ordvec` and `ordvec-manifest`;
    - PyPI (confirm the post-publish hash-verification log, optionally
      `pip download ordvec==X.Y.Z` and inspect, plus check the PEP 740 attestation
      at `GET https://pypi.org/integrity/ordvec/X.Y.Z/<file>/provenance`);
@@ -212,6 +230,6 @@ filename. Until either is updated, the corresponding gated publish fails
 
 ## Coordinated release note
 
-The crate publish, the PyPI wheel, and the paper's Zenodo deposit are
+The Rust crate publishes, the PyPI wheel, and the paper's Zenodo deposit are
 coordinated (the paper consumes the bindings for a final cold-repro run). Do
 not ship one leg in isolation without the maintainer's go.

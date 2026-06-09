@@ -7,23 +7,24 @@
 # unsigned releases may keep the score below 10 temporarily. The same graph
 # keeps the build-attest-publish chain honest:
 #
-#     build-{crate,wheels,sdist}                  (raw artifacts)
+#     build-{crate,manifest-crate,wheels,sdist}   (raw artifacts)
 #         |
 #         +-> pypi-canonical-dist (current build, or verified immutable PyPI files)
 #         |
 #         +-> attest         (id-token + attestations + .sigstore.json;
-#         |                   crate-only when PyPI files already exist)
+#         |                   Rust-crates-only when PyPI files already exist)
 #         +-> provenance     (slsa-github-generator @vX.Y.Z, .intoto.jsonl;
-#         |                   crate-only when PyPI files already exist)
+#         |                   Rust-crates-only when PyPI files already exist)
 #         |
 #         v
 #     release-assets-draft   (uploads .crate/canonical .whl/.tar.gz/.sigstore.json/.intoto.jsonl to DRAFT release)
 #         |
-#         +--> publish-crate (byte-identity check vs attested .crate, then cargo publish)
-#         +--> publish-pypi  (Trusted Publishing, or existing-file verification)
+#         +--> publish-crate          (byte-identity check vs attested .crate, then cargo publish)
+#         +--> publish-manifest-crate (after publish-crate; same byte-identity proof)
+#         +--> publish-pypi           (Trusted Publishing, or existing-file verification)
 #               |
 #               v
-#         publish-github-release (un-draft, ONLY after both publishes succeed)
+#         publish-github-release (un-draft, ONLY after all registry publishes succeed)
 #
 # A regression in any of these edges (a future commit drops a needs:, renames
 # the provenance file, lets release-assets-draft un-draft itself, forgets the
@@ -70,6 +71,24 @@ require_job_line() {
   printf '%s\n' "$line"
 }
 
+job_downloads_artifact_to_path() {
+  local jobname="$1" artifact="$2" expected_path="$3"
+  job_body "$jobname" | awk -v artifact="$artifact" -v expected_path="$expected_path" '
+    function flush_step() {
+      if (has_download && has_name && has_path) {
+        found = 1
+      }
+      has_download = has_name = has_path = 0
+    }
+
+    /^[[:space:]]+-[[:space:]]/ { flush_step() }
+    $0 ~ "uses:[[:space:]]*actions/download-artifact" { has_download = 1 }
+    $0 ~ "^[[:space:]]+name:[[:space:]]*" artifact "[[:space:]]*$" { has_name = 1 }
+    $0 ~ "^[[:space:]]+path:[[:space:]]*" expected_path "[[:space:]]*$" { has_path = 1 }
+    END { flush_step(); exit found ? 0 : 1 }
+  '
+}
+
 # ----------------------------------------------------------------------
 # (1) release-assets-draft needs attest + provenance + require-ci-green + notes
 #     + exact linux/aarch64 wheel smoke
@@ -90,6 +109,10 @@ for ext in '\.crate' '\.whl' '\.tar\.gz' '\.sigstore\.json' '\.intoto\.jsonl'; d
 done
 printf '%s\n' "$body_draft" | grep -qE 'name:[[:space:]]*pypi-canonical-dist' \
   || fail "release-assets-draft must upload canonical Python dist, not raw rebuilt wheel/sdist artifacts"
+job_downloads_artifact_to_path release-assets-draft dist-crate dist \
+  || fail "release-assets-draft must download the core dist-crate artifact into dist"
+job_downloads_artifact_to_path release-assets-draft dist-manifest-crate dist \
+  || fail "release-assets-draft must download the manifest dist-manifest-crate artifact into dist"
 printf '%s\n' "$body_draft" | grep -qE "$github_repo_env_re" \
   || fail "release-assets-draft must set \`GH_REPO: \${{ github.repository }}\` (no checkout, so gh release upload needs explicit repo context)"
 
@@ -99,7 +122,7 @@ printf '%s\n' "$body_draft" | grep -qE "$github_repo_env_re" \
 #     publish failure mode).
 # ----------------------------------------------------------------------
 if printf '%s\n' "$body_draft" | grep -qE 'gh release edit.*--draft=false'; then
-  fail "release-assets-draft must NOT un-draft the Release (un-drafting belongs in publish-github-release, after both publishes succeed)"
+  fail "release-assets-draft must NOT un-draft the Release (un-drafting belongs in publish-github-release, after all registry publishes succeed)"
 fi
 
 # ----------------------------------------------------------------------
@@ -132,11 +155,25 @@ printf '%s\n' "$att" | grep -qE '^[[:space:]]+id-token:[[:space:]]*write' \
   || fail "attest job must grant \`id-token: write\` (Sigstore OIDC signing cert)"
 printf '%s\n' "$att" | grep -qE '^[[:space:]]+attestations:[[:space:]]*write' \
   || fail "attest job must grant \`attestations: write\` (persist to the GitHub attestation store)"
+job_needs attest build-manifest-crate \
+  || fail "attest must \`needs: build-manifest-crate\` so the manifest .crate is an attestation subject"
+job_downloads_artifact_to_path attest dist-manifest-crate dist \
+  || fail "attest must download the dist-manifest-crate artifact into dist"
+
+comb="$(job_body combine-hashes)"
+job_needs combine-hashes build-manifest-crate \
+  || fail "combine-hashes must \`needs: build-manifest-crate\` so the manifest .crate is a SLSA subject"
+job_downloads_artifact_to_path combine-hashes dist-manifest-crate dist \
+  || fail "combine-hashes must download the dist-manifest-crate artifact into dist"
+
+build_manifest="$(job_body build-manifest-crate)"
+printf '%s\n' "$build_manifest" | grep -qE 'cargo[[:space:]]+package[[:space:]]+-p[[:space:]]+ordvec-manifest[[:space:]]+--locked[[:space:]]+--no-verify' \
+  || fail "build-manifest-crate must package with --no-verify before the lockstep core crate exists on crates.io"
 
 # ----------------------------------------------------------------------
-# (8) Both publish jobs grant id-token: write AND need release-assets-draft.
+# (8) Registry publish jobs grant id-token: write AND need release-assets-draft.
 # ----------------------------------------------------------------------
-for pub in publish-crate publish-pypi; do
+for pub in publish-crate publish-manifest-crate publish-pypi; do
   body="$(job_body "$pub")"
   printf '%s\n' "$body" | grep -qE '^[[:space:]]+id-token:[[:space:]]*write' \
     || fail "$pub must grant \`id-token: write\` (Trusted Publishing OIDC)"
@@ -145,7 +182,7 @@ for pub in publish-crate publish-pypi; do
 done
 
 # ----------------------------------------------------------------------
-# (9) publish-crate proves byte-identity vs the attested .crate on BOTH
+# (9) Rust crate publish jobs prove byte-identity vs the attested .crate on BOTH
 #     sides of `cargo publish`:
 #       (9a) pre-publish: download the attested .crate, re-run `cargo package`,
 #            sha256-compare. Fail-closed BEFORE the OIDC token is minted.
@@ -155,28 +192,38 @@ done
 #            cannot inspect — this is the empirical proof that the bytes
 #            actually served by crates.io match the SLSA-attested artifact.
 # ----------------------------------------------------------------------
-pcb="$(job_body publish-crate)"
-printf '%s\n' "$pcb" | grep -qE 'uses:[[:space:]]*actions/download-artifact' \
-  || fail "publish-crate must download the attested dist-crate artifact (byte-identity gate)"
-printf '%s\n' "$pcb" | grep -qE 'name:[[:space:]]*dist-crate' \
-  || fail "publish-crate must download the artifact named \`dist-crate\` (the attested .crate)"
-printf '%s\n' "$pcb" | grep -qE 'cargo[[:space:]]+package[[:space:]]+-p[[:space:]]+ordvec[[:space:]]+--locked' \
-  || fail "publish-crate must re-run \`cargo package -p ordvec --locked\` so it can sha256-compare to the attested .crate (pre-publish gate)"
-printf '%s\n' "$pcb" | grep -qE 'sha256sum' \
-  || fail "publish-crate must sha256sum-compare the repackaged .crate vs the attested .crate before publishing"
-printf '%s\n' "$pcb" | grep -qE 'crates\.io/api/v1/crates/ordvec|static\.crates\.io/crates/ordvec' \
-  || fail "publish-crate must download the just-published .crate from crates.io after \`cargo publish\` (post-publish byte-identity proof; pre-publish alone cannot inspect cargo publish's internal packaging)"
+check_crate_publish_job() {
+  local jobname="$1" package="$2" artifact="$3" body pre_line oidc_line publish_line post_line
+  body="$(job_body "$jobname")"
+  printf '%s\n' "$body" | grep -qE 'uses:[[:space:]]*actions/download-artifact' \
+    || fail "$jobname must download the attested $artifact artifact (byte-identity gate)"
+  printf '%s\n' "$body" | grep -qE "name:[[:space:]]*${artifact}" \
+    || fail "$jobname must download the artifact named \`$artifact\` (the attested .crate)"
+  printf '%s\n' "$body" | grep -qE "cargo[[:space:]]+package[[:space:]]+-p[[:space:]]+${package}[[:space:]]+--locked" \
+    || fail "$jobname must re-run \`cargo package -p $package --locked\` so it can sha256-compare to the attested .crate (pre-publish gate)"
+  printf '%s\n' "$body" | grep -qE "cargo[[:space:]]+publish[[:space:]]+-p[[:space:]]+${package}[[:space:]]+--locked" \
+    || fail "$jobname must run \`cargo publish -p $package --locked\`"
+  printf '%s\n' "$body" | grep -qE 'sha256sum' \
+    || fail "$jobname must sha256sum-compare the repackaged .crate vs the attested .crate before publishing"
+  printf '%s\n' "$body" | grep -qE "crates\.io/api/v1/crates/${package}|static\.crates\.io/crates/${package}" \
+    || fail "$jobname must download the just-published .crate from crates.io after \`cargo publish\` (post-publish byte-identity proof; pre-publish alone cannot inspect cargo publish's internal packaging)"
 
-pre_line="$(require_job_line publish-crate '^[[:space:]]+- name:[[:space:]]*Verify byte-identity vs the attested \.crate' 'a pre-publish byte-identity verification step')"
-oidc_line="$(require_job_line publish-crate '^[[:space:]]+- name:[[:space:]]*Mint a short-lived crates\.io credential' 'an OIDC credential mint step')"
-publish_line="$(require_job_line publish-crate '^[[:space:]]+- name:[[:space:]]*cargo publish' 'a cargo publish step')"
-post_line="$(require_job_line publish-crate '^[[:space:]]+- name:[[:space:]]*Post-publish byte-identity' 'a post-publish crates.io byte-identity step')"
-[ "$pre_line" -lt "$oidc_line" ] \
-  || fail "publish-crate must verify byte-identity BEFORE minting the crates.io OIDC credential"
-[ "$oidc_line" -lt "$publish_line" ] \
-  || fail "publish-crate must mint the crates.io OIDC credential BEFORE \`cargo publish\`"
-[ "$publish_line" -lt "$post_line" ] \
-  || fail "publish-crate must run the crates.io post-publish download/compare AFTER \`cargo publish\`"
+  pre_line="$(require_job_line "$jobname" '^[[:space:]]+- name:[[:space:]]*Verify byte-identity vs the attested \.crate' 'a pre-publish byte-identity verification step')"
+  oidc_line="$(require_job_line "$jobname" '^[[:space:]]+- name:[[:space:]]*Mint a short-lived crates\.io credential' 'an OIDC credential mint step')"
+  publish_line="$(require_job_line "$jobname" '^[[:space:]]+- name:[[:space:]]*cargo publish' 'a cargo publish step')"
+  post_line="$(require_job_line "$jobname" '^[[:space:]]+- name:[[:space:]]*Post-publish byte-identity' 'a post-publish crates.io byte-identity step')"
+  [ "$pre_line" -lt "$oidc_line" ] \
+    || fail "$jobname must verify byte-identity BEFORE minting the crates.io OIDC credential"
+  [ "$oidc_line" -lt "$publish_line" ] \
+    || fail "$jobname must mint the crates.io OIDC credential BEFORE \`cargo publish\`"
+  [ "$publish_line" -lt "$post_line" ] \
+    || fail "$jobname must run the crates.io post-publish download/compare AFTER \`cargo publish\`"
+}
+
+check_crate_publish_job publish-crate ordvec dist-crate
+check_crate_publish_job publish-manifest-crate ordvec-manifest dist-manifest-crate
+job_needs publish-manifest-crate publish-crate \
+  || fail "publish-manifest-crate must \`needs: publish-crate\` so the lockstep core crate publishes first"
 
 pcd="$(job_body pypi-canonical-dist)"
 printf '%s\n' "$pcd" | grep -qE 'release_pypi_canonical_dist\.py canonicalize' \
@@ -195,11 +242,11 @@ grep -q 'pypi.org/pypi' tests/release_pypi_canonical_dist.py \
   || fail "release_pypi_canonical_dist.py must query PyPI for served file hashes"
 
 # ----------------------------------------------------------------------
-# (10) publish-github-release un-drafts ONLY AFTER both registry publishes succeed.
+# (10) publish-github-release un-drafts ONLY AFTER all registry publishes succeed.
 # ----------------------------------------------------------------------
-for dep in publish-crate publish-pypi; do
+for dep in publish-crate publish-manifest-crate publish-pypi; do
   job_needs publish-github-release "$dep" \
-    || fail "publish-github-release must \`needs: $dep\` (un-draft only after BOTH registry publishes succeed)"
+    || fail "publish-github-release must \`needs: $dep\` (un-draft only after all registry publishes succeed)"
 done
 unp="$(job_body publish-github-release)"
 printf '%s\n' "$unp" | grep -qE 'gh release edit.*--draft=false' \
