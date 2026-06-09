@@ -11,6 +11,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+from fnmatch import fnmatchcase
 from typing import Any
 
 try:
@@ -1010,6 +1011,23 @@ def check_pypi_canonical_dist(
         if not has_need(job, needed):
             fail(f"{path}: {job_name} must need {needed}")
 
+    wheel_job = mapping(jobs.get(wheel_build_job), f"{path}: jobs.{wheel_build_job}")
+    wheel_steps = sequence(wheel_job.get("steps"), f"{path}: jobs.{wheel_build_job}.steps")
+    wheel_upload_names: list[str] = []
+    for index, raw_step in enumerate(wheel_steps):
+        step = mapping(raw_step, f"{path}: jobs.{wheel_build_job}.steps[{index}]")
+        if action_name(step) != "actions/upload-artifact":
+            continue
+        with_map = mapping(step.get("with", {}), f"{path}: {step_label(index, step)} with")
+        name = with_map.get("name")
+        if isinstance(name, str) and fnmatchcase(name, wheel_artifact_pattern):
+            wheel_upload_names.append(name)
+    if len(wheel_upload_names) != 1:
+        fail(
+            f"{path}: {wheel_build_job} must upload exactly one artifact matching "
+            f"{wheel_artifact_pattern}; got {wheel_upload_names!r}"
+        )
+
     outputs = mapping(job.get("outputs"), f"{path}: jobs.{job_name}.outputs")
     if outputs.get("source") != "${{ steps.canonicalize.outputs.source }}":
         fail(f"{path}: {job_name} must expose the canonical source output")
@@ -1554,7 +1572,7 @@ def main() -> None:
         job_name="pypi-manifest-canonical-dist",
         wheel_build_job="build-manifest-wheels",
         sdist_build_job="build-manifest-sdist",
-        wheel_artifact_pattern="wheels-manifest-*",
+        wheel_artifact_pattern="manifest-wheels-*",
         sdist_artifact_name="sdist-manifest",
         canonical_artifact_name="pypi-manifest-canonical-dist",
         project="ordvec-manifest",
