@@ -1127,49 +1127,50 @@ jobs:
             echo "crates.io metadata does not list ordvec ${VERSION}; proceeding with publish."
           else
             downloaded=false
-            rm -f "$EXISTING"
+            API_STATUS="unset"
+            STATIC_STATUS="unset"
             API_CURL_EXIT=0
-            curl -sSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
-              --user-agent "$CRATES_IO_USER_AGENT" \
-              --write-out "%{http_code}" \
-              --output "$EXISTING" \
-              "$API_URL" > "$API_STATUS_FILE" || API_CURL_EXIT=$?
-            API_STATUS="$(cat "$API_STATUS_FILE")"
-            if [ "$API_CURL_EXIT" -ne 0 ]; then
-              echo "::error::could not download crates.io .crate while checking ordvec ${VERSION} at $API_URL (curl exit ${API_CURL_EXIT}). Refusing recovery."
-              exit 1
-            fi
-            case "$API_STATUS" in
-              200)
-                downloaded=true
-                ;;
-              *)
-                rm -f "$EXISTING"
-                ;;
-            esac
-          fi
-
-          if [ "${downloaded:-false}" != true ] && [ "$version_present" = true ]; then
             STATIC_CURL_EXIT=0
-            curl -sSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
-              --user-agent "$CRATES_IO_USER_AGENT" \
-              --write-out "%{http_code}" \
-              --output "$EXISTING" \
-              "$STATIC_URL" > "$STATIC_STATUS_FILE" || STATIC_CURL_EXIT=$?
-            STATIC_STATUS="$(cat "$STATIC_STATUS_FILE")"
-            if [ "$STATIC_CURL_EXIT" -ne 0 ]; then
-              echo "::error::could not determine crates.io status while checking ordvec ${VERSION} at $STATIC_URL (curl exit ${STATIC_CURL_EXIT}). Refusing recovery."
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              rm -f "$EXISTING"
+              API_CURL_EXIT=0
+              curl -sSL --retry 0 --retry-all-errors --connect-timeout 5 --max-time 10 \
+                --user-agent "$CRATES_IO_USER_AGENT" \
+                --write-out "%{http_code}" \
+                --output "$EXISTING" \
+                "$API_URL" > "$API_STATUS_FILE" || API_CURL_EXIT=$?
+              API_STATUS="$(cat "$API_STATUS_FILE")"
+              if [ "$API_CURL_EXIT" -eq 0 ] && [ "$API_STATUS" = 200 ]; then
+                downloaded=true
+                break
+              fi
+
+              rm -f "$EXISTING"
+              STATIC_CURL_EXIT=0
+              curl -sSL --retry 0 --retry-all-errors --connect-timeout 5 --max-time 10 \
+                --user-agent "$CRATES_IO_USER_AGENT" \
+                --write-out "%{http_code}" \
+                --output "$EXISTING" \
+                "$STATIC_URL" > "$STATIC_STATUS_FILE" || STATIC_CURL_EXIT=$?
+              STATIC_STATUS="$(cat "$STATIC_STATUS_FILE")"
+              if [ "$STATIC_CURL_EXIT" -eq 0 ] && [ "$STATIC_STATUS" = 200 ]; then
+                downloaded=true
+                break
+              fi
+
+              rm -f "$EXISTING"
+              echo "  waiting for crates.io to serve ordvec ${VERSION} for recovery (${i}/12)..."
+              if [ "$i" != 12 ]; then sleep 5; fi
+            done
+
+            if [ "$downloaded" != true ]; then
+              API_DETAIL="status ${API_STATUS:-unset}"
+              STATIC_DETAIL="status ${STATIC_STATUS:-unset}"
+              if [ "${API_CURL_EXIT:-0}" -ne 0 ]; then API_DETAIL="curl exit ${API_CURL_EXIT}"; fi
+              if [ "${STATIC_CURL_EXIT:-0}" -ne 0 ]; then STATIC_DETAIL="curl exit ${STATIC_CURL_EXIT}"; fi
+              echo "::error::crates.io metadata lists ordvec ${VERSION}, but recovery endpoints did not serve the .crate after retries (API ${API_DETAIL}, static ${STATIC_DETAIL}). Refusing recovery."
               exit 1
             fi
-            case "$STATIC_STATUS" in
-              200)
-                downloaded=true
-                ;;
-              *)
-                echo "::error::crates.io metadata lists ordvec ${VERSION}, but recovery endpoints did not serve the .crate (API status ${API_STATUS:-unset}, static status ${STATIC_STATUS}). Refusing recovery."
-                exit 1
-                ;;
-            esac
           fi
 
           if [ "${downloaded:-false}" = true ]; then
@@ -1503,49 +1504,50 @@ jobs:
             echo "crates.io metadata does not list ordvec-manifest ${VERSION}; proceeding with publish."
           else
             downloaded=false
-            rm -f "$EXISTING"
+            API_STATUS="unset"
+            STATIC_STATUS="unset"
             API_CURL_EXIT=0
-            curl -sSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
-              --user-agent "$CRATES_IO_USER_AGENT" \
-              --write-out "%{http_code}" \
-              --output "$EXISTING" \
-              "$API_URL" > "$API_STATUS_FILE" || API_CURL_EXIT=$?
-            API_STATUS="$(cat "$API_STATUS_FILE")"
-            if [ "$API_CURL_EXIT" -ne 0 ]; then
-              echo "::error::could not download crates.io .crate while checking ordvec-manifest ${VERSION} at $API_URL (curl exit ${API_CURL_EXIT}). Refusing recovery."
-              exit 1
-            fi
-            case "$API_STATUS" in
-              200)
-                downloaded=true
-                ;;
-              *)
-                rm -f "$EXISTING"
-                ;;
-            esac
-          fi
-
-          if [ "${downloaded:-false}" != true ] && [ "$version_present" = true ]; then
             STATIC_CURL_EXIT=0
-            curl -sSL --retry 3 --retry-delay 2 --retry-all-errors --connect-timeout 10 --max-time 60 \
-              --user-agent "$CRATES_IO_USER_AGENT" \
-              --write-out "%{http_code}" \
-              --output "$EXISTING" \
-              "$STATIC_URL" > "$STATIC_STATUS_FILE" || STATIC_CURL_EXIT=$?
-            STATIC_STATUS="$(cat "$STATIC_STATUS_FILE")"
-            if [ "$STATIC_CURL_EXIT" -ne 0 ]; then
-              echo "::error::could not determine crates.io status while checking ordvec-manifest ${VERSION} at $STATIC_URL (curl exit ${STATIC_CURL_EXIT}). Refusing recovery."
+            for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+              rm -f "$EXISTING"
+              API_CURL_EXIT=0
+              curl -sSL --retry 0 --retry-all-errors --connect-timeout 5 --max-time 10 \
+                --user-agent "$CRATES_IO_USER_AGENT" \
+                --write-out "%{http_code}" \
+                --output "$EXISTING" \
+                "$API_URL" > "$API_STATUS_FILE" || API_CURL_EXIT=$?
+              API_STATUS="$(cat "$API_STATUS_FILE")"
+              if [ "$API_CURL_EXIT" -eq 0 ] && [ "$API_STATUS" = 200 ]; then
+                downloaded=true
+                break
+              fi
+
+              rm -f "$EXISTING"
+              STATIC_CURL_EXIT=0
+              curl -sSL --retry 0 --retry-all-errors --connect-timeout 5 --max-time 10 \
+                --user-agent "$CRATES_IO_USER_AGENT" \
+                --write-out "%{http_code}" \
+                --output "$EXISTING" \
+                "$STATIC_URL" > "$STATIC_STATUS_FILE" || STATIC_CURL_EXIT=$?
+              STATIC_STATUS="$(cat "$STATIC_STATUS_FILE")"
+              if [ "$STATIC_CURL_EXIT" -eq 0 ] && [ "$STATIC_STATUS" = 200 ]; then
+                downloaded=true
+                break
+              fi
+
+              rm -f "$EXISTING"
+              echo "  waiting for crates.io to serve ordvec-manifest ${VERSION} for recovery (${i}/12)..."
+              if [ "$i" != 12 ]; then sleep 5; fi
+            done
+
+            if [ "$downloaded" != true ]; then
+              API_DETAIL="status ${API_STATUS:-unset}"
+              STATIC_DETAIL="status ${STATIC_STATUS:-unset}"
+              if [ "${API_CURL_EXIT:-0}" -ne 0 ]; then API_DETAIL="curl exit ${API_CURL_EXIT}"; fi
+              if [ "${STATIC_CURL_EXIT:-0}" -ne 0 ]; then STATIC_DETAIL="curl exit ${STATIC_CURL_EXIT}"; fi
+              echo "::error::crates.io metadata lists ordvec-manifest ${VERSION}, but recovery endpoints did not serve the .crate after retries (API ${API_DETAIL}, static ${STATIC_DETAIL}). Refusing recovery."
               exit 1
             fi
-            case "$STATIC_STATUS" in
-              200)
-                downloaded=true
-                ;;
-              *)
-                echo "::error::crates.io metadata lists ordvec-manifest ${VERSION}, but recovery endpoints did not serve the .crate (API status ${API_STATUS:-unset}, static status ${STATIC_STATUS}). Refusing recovery."
-                exit 1
-                ;;
-            esac
           fi
 
           if [ "${downloaded:-false}" = true ]; then

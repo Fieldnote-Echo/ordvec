@@ -919,6 +919,38 @@ def metadata_curl_uses(words: list[str]) -> bool:
     )
 
 
+def recovery_curl_is_bounded(words: list[str], url_var: str) -> bool:
+    return (
+        recovery_curl_uses(words, url_var)
+        and has_shell_option_value(words, {"--retry"}, {"0", "1"})
+        and has_shell_option_value(words, {"--connect-timeout"}, {"5", "10"})
+        and has_shell_option_value(words, {"--max-time", "-m"}, {"10", "15", "20"})
+    )
+
+
+def has_recovery_retry_loop(run: str, package: str) -> bool:
+    bounded_loop = re.search(
+        r"\bfor\s+[A-Za-z_][A-Za-z0-9_]*\s+in\s+"
+        r"(?:1\s+2\s+3\s+4\s+5\s+6\s+7\s+8\s+9\s+10\s+11\s+12|\{1\.\.12\}|\$\(seq\s+1\s+12\));\s*do",
+        run,
+    )
+    return bool(
+        bounded_loop
+        and re.search(r"\bsleep\s+5\b", run)
+        and re.search(
+            r'\[\s*"\$API_CURL_EXIT"\s+-eq\s+0\s*\]\s*&&\s*'
+            r'\[\s*"\$API_STATUS"\s*=\s*200\s*\]',
+            run,
+        )
+        and re.search(
+            r'\[\s*"\$STATIC_CURL_EXIT"\s+-eq\s+0\s*\]\s*&&\s*'
+            r'\[\s*"\$STATIC_STATUS"\s*=\s*200\s*\]',
+            run,
+        )
+        and f"waiting for crates.io to serve {package}" in run
+    )
+
+
 def check_crate_recovery_status_handling(
     recovery_run: str, path: str, job_name: str, package: str
 ) -> None:
@@ -931,17 +963,28 @@ def check_crate_recovery_status_handling(
         "could not determine crates.io metadata",
         "unexpected crates.io metadata status",
         "API_CURL_EXIT=0",
-        'if [ "$API_CURL_EXIT" -ne 0 ]; then',
         "STATIC_CURL_EXIT=0",
-        'if [ "$STATIC_CURL_EXIT" -ne 0 ]; then',
-        "could not download crates.io .crate",
-        "recovery endpoints did not serve the .crate",
+        "curl exit ${API_CURL_EXIT}",
+        "curl exit ${STATIC_CURL_EXIT}",
+        "recovery endpoints did not serve the .crate after retries",
         "200)",
         "404)",
     )
     for fragment in required_fragments:
         if fragment not in recovery_run:
             fail(f"{path}: {job_name} recovery step must contain {fragment!r}")
+    if not has_recovery_retry_loop(recovery_run, package):
+        fail(
+            f"{path}: {job_name} recovery step must use a bounded propagation loop "
+            "with sleep and API/static success checks"
+        )
+    curl_commands = shell_curl_commands(recovery_run)
+    for url_var in ("API_URL", "STATIC_URL"):
+        if not any(recovery_curl_is_bounded(words, url_var) for words in curl_commands):
+            fail(
+                f"{path}: {job_name} recovery step must keep ${url_var} curl probes "
+                "short inside the outer propagation loop"
+            )
     if "Both crates.io recovery endpoints returned 404" in recovery_run:
         fail(
             f"{path}: {job_name} recovery step must use crates.io metadata, "
