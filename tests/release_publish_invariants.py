@@ -20,8 +20,8 @@ except ModuleNotFoundError:
 
 
 WORKFLOW_PATH = os.environ.get("RELEASE_WORKFLOW_PATH", ".github/workflows/release.yml")
-PYTHON_WORKFLOW_PATH = os.environ.get("PYTHON_WORKFLOW_PATH", ".github/workflows/python.yml")
 CI_WORKFLOW_PATH = os.environ.get("CI_WORKFLOW_PATH", ".github/workflows/ci.yml")
+PYTHON_WORKFLOW_PATH = os.environ.get("PYTHON_WORKFLOW_PATH", ".github/workflows/python.yml")
 STRICT_STABLE_TAG_PATTERN = r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 COVERAGE_WORKFLOW_PATH = os.environ.get("COVERAGE_WORKFLOW_PATH", ".github/workflows/coverage.yml")
 SDE_ACTION_PATH = os.environ.get(
@@ -537,6 +537,170 @@ def check_strict_release_tag_patterns(workflow: dict[str, Any], path: str) -> No
             fail(f"strict release tag regex must reject {tag}")
 
 
+def cargo_package_files(package: str) -> set[str]:
+    cmd = ["cargo", "package", "-p", package, "--list", "--locked", "--allow-dirty"]
+    try:
+        output = subprocess.check_output(cmd, text=True, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as exc:
+        stderr = (exc.stderr or "").strip()
+        fail(f"{' '.join(cmd)} failed while checking package contents: {stderr}")
+    return {line.strip() for line in output.splitlines() if line.strip()}
+
+
+def check_required_package_files(package: str, files: set[str], required: set[str]) -> None:
+    missing = sorted(required - files)
+    if missing:
+        fail(f"{package}: package is missing required files: {', '.join(missing)}")
+
+
+def check_forbidden_package_prefixes(
+    package: str, files: set[str], forbidden_prefixes: tuple[str, ...]
+) -> None:
+    forbidden = sorted(
+        file for file in files if any(file == prefix.rstrip("/") or file.startswith(prefix) for prefix in forbidden_prefixes)
+    )
+    if forbidden:
+        fail(f"{package}: package includes forbidden files: {', '.join(forbidden)}")
+
+
+def check_packaged_readme_links(package: str, files: set[str], readme_path: str) -> None:
+    readme = read_text(readme_path)
+    for match in re.finditer(r"!?\[[^\]]*\]\(([^)]+)\)", readme):
+        raw_target = match.group(1).strip()
+        if not raw_target or raw_target.startswith("#"):
+            continue
+        if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*:", raw_target):
+            continue
+        target = raw_target.split("#", 1)[0].split("?", 1)[0].strip()
+        if not target:
+            continue
+        if target.startswith("/") or target.startswith("../") or "/../" in target:
+            fail(f"{package}: README link {raw_target!r} escapes the packaged crate")
+        normalized = posixpath.normpath(target)
+        if normalized not in files and not any(file.startswith(normalized + "/") for file in files):
+            fail(f"{package}: README link {raw_target!r} points to a file or directory not packaged")
+
+
+def check_package_contents() -> None:
+    core_files = cargo_package_files("ordvec")
+    check_required_package_files(
+        "ordvec",
+        core_files,
+        {
+            "Cargo.lock",
+            "Cargo.toml",
+            "Cargo.toml.orig",
+            "CHANGELOG.md",
+            "LICENSE-APACHE-2.0",
+            "LICENSE-MIT",
+            "README.md",
+            "benchmarks/rank_modes_results.txt",
+            "docs/PERSISTED_FORMAT.md",
+            "docs/RANK_MODES.md",
+            "docs/compatibility-policy.md",
+            "docs/determinism.md",
+            "examples/bench_rank.rs",
+            "src/lib.rs",
+            "tests/index/main.rs",
+            "tests/persistence_compat.rs",
+        },
+    )
+    check_forbidden_package_prefixes(
+        "ordvec",
+        core_files,
+        (
+            ".agents/",
+            ".claude/",
+            ".codex/",
+            ".github/",
+            ".playwright-mcp/",
+            "fuzz/",
+            "ordvec-ffi/",
+            "ordvec-go/",
+            "ordvec-manifest/",
+            "ordvec-python/",
+            "target/",
+            "tests/release_",
+        ),
+    )
+    check_packaged_readme_links("ordvec", core_files, "README.md")
+
+    manifest_files = cargo_package_files("ordvec-manifest")
+    check_required_package_files(
+        "ordvec-manifest",
+        manifest_files,
+        {
+            "Cargo.lock",
+            "Cargo.toml",
+            "Cargo.toml.orig",
+            "README.md",
+            "src/lib.rs",
+            "src/main.rs",
+            "src/sqlite.rs",
+            "tests/manifest.rs",
+        },
+    )
+    check_forbidden_package_prefixes(
+        "ordvec-manifest",
+        manifest_files,
+        (
+            ".agents/",
+            ".claude/",
+            ".codex/",
+            ".github/",
+            ".playwright-mcp/",
+            "docs/",
+            "fuzz/",
+            "ordvec-ffi/",
+            "ordvec-go/",
+            "ordvec-manifest/",
+            "ordvec-python/",
+            "target/",
+            "tests/release_",
+        ),
+    )
+    check_packaged_readme_links("ordvec-manifest", manifest_files, "ordvec-manifest/README.md")
+
+
+def check_ci_package_guards(workflow: dict[str, Any], path: str) -> None:
+    jobs = mapping(workflow.get("jobs"), f"{path}: jobs")
+    deps = mapping(jobs.get("deps"), f"{path}: jobs.deps")
+    steps = sequence(deps.get("steps"), f"{path}: jobs.deps.steps")
+
+    core_dry_runs: list[str] = []
+    manifest_deferred_runs: list[str] = []
+    for index, raw_step in enumerate(steps):
+        step = mapping(raw_step, f"{path}: jobs.deps.steps[{index}]")
+        run = step.get("run")
+        if not isinstance(run, str):
+            continue
+        for words in cargo_command_words(run, "publish", "ordvec"):
+            if "--dry-run" in words:
+                core_dry_runs.append(run)
+        if cargo_command_words(run, "package", "ordvec-manifest"):
+            manifest_deferred_runs.append(run)
+
+    if len(core_dry_runs) != 1:
+        fail(f"{path}: deps job must run exactly one `cargo publish -p ordvec --dry-run --locked`")
+    if len(manifest_deferred_runs) != 1:
+        fail(f"{path}: deps job must run exactly one deferred ordvec-manifest package check")
+
+    manifest_run = manifest_deferred_runs[0]
+    if "grep" in manifest_run or "failed to select a version for the requirement" in manifest_run:
+        fail(f"{path}: deferred ordvec-manifest package check must not grep cargo errors")
+    required_fragments = (
+        "cargo metadata --no-deps --format-version 1",
+        "https://crates.io/api/v1/crates/ordvec/${core_version}",
+        '--write-out "%{http_code}"',
+        '[ "${status}" = "404" ]',
+        "ordvec-manifest package check is deferred",
+        "not deferring a real packaging failure",
+    )
+    for fragment in required_fragments:
+        if fragment not in manifest_run:
+            fail(f"{path}: deferred ordvec-manifest package check must include {fragment!r}")
+
+
 def shell_vars(name: str) -> set[str]:
     return {f"${name}", f"${{{name}}}"}
 
@@ -591,20 +755,33 @@ def has_cargo_package_arg(words: list[str], package: str) -> bool:
     return False
 
 
-def has_cargo_command(run: str, subcommand: str, package: str) -> bool:
+def cargo_command_words(run: str, subcommand: str, package: str) -> list[list[str]]:
+    commands: list[list[str]] = []
     for line in shell_logical_lines(run):
-        if line.startswith("if "):
-            line = line[3:].strip()
-        line = line.split("; then", 1)[0].strip().rstrip(";")
-        try:
-            words = shlex.split(line)
-        except ValueError:
-            continue
-        if len(words) < 3 or words[0] != "cargo" or words[1] != subcommand:
-            continue
-        if "--locked" in words and has_cargo_package_arg(words[2:], package):
-            return True
-    return False
+        for part in re.split(r"&&|\|\||;", line):
+            part = part.strip()
+            for prefix in ("if ", "then ", "! "):
+                if part.startswith(prefix):
+                    part = part[len(prefix):].strip()
+            if not part:
+                continue
+            try:
+                words = shlex.split(part)
+            except ValueError:
+                continue
+            cmd_idx = 0
+            while cmd_idx < len(words) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", words[cmd_idx]):
+                cmd_idx += 1
+            cmd = words[cmd_idx:]
+            if len(cmd) < 3 or cmd[0] != "cargo" or cmd[1] != subcommand:
+                continue
+            if "--locked" in cmd and has_cargo_package_arg(cmd[2:], package):
+                commands.append(cmd)
+    return commands
+
+
+def has_cargo_command(run: str, subcommand: str, package: str) -> bool:
+    return bool(cargo_command_words(run, subcommand, package))
 
 
 def has_shell_arg(words: list[str], values: set[str]) -> bool:
@@ -886,24 +1063,37 @@ def check_publish_pypi(workflow: dict[str, Any], path: str) -> None:
 
 
 def check_publish_crate_job(
-    workflow: dict[str, Any], path: str, job_name: str, package: str, artifact_name: str
+    workflow: dict[str, Any],
+    path: str,
+    job_name: str,
+    package: str,
+    artifact_name: str,
+    *,
+    require_publish_dry_run: bool = False,
 ) -> None:
     jobs = mapping(workflow.get("jobs"), f"{path}: jobs")
     job = mapping(jobs.get(job_name), f"{path}: jobs.{job_name}")
     steps = sequence(job.get("steps"), f"{path}: jobs.{job_name}.steps")
 
     crate_downloads: list[tuple[int, dict[str, Any], dict[str, Any]]] = []
-    package_runs: list[str] = []
-    publish_runs: list[str] = []
+    package_runs: list[tuple[int, str]] = []
+    publish_runs: list[tuple[int, str]] = []
+    publish_dry_runs: list[tuple[int, str]] = []
+    auth_steps: list[int] = []
 
     for index, raw_step in enumerate(steps):
         step = mapping(raw_step, f"{path}: jobs.{job_name}.steps[{index}]")
         run = step.get("run")
         if isinstance(run, str):
             if has_cargo_command(run, "package", package):
-                package_runs.append(run)
-            if has_cargo_command(run, "publish", package):
-                publish_runs.append(run)
+                package_runs.append((index, run))
+            for words in cargo_command_words(run, "publish", package):
+                if "--dry-run" in words:
+                    publish_dry_runs.append((index, run))
+                else:
+                    publish_runs.append((index, run))
+        if action_name(step) == "rust-lang/crates-io-auth-action":
+            auth_steps.append(index)
         if action_name(step) == "actions/download-artifact":
             with_block = step.get("with", {})
             with_map = mapping(with_block, f"{path}: {step_label(index, step)} with")
@@ -925,21 +1115,36 @@ def check_publish_crate_job(
         fail(f"{path}: {job_name} must run exactly one `cargo package -p {package} --locked`")
     if len(publish_runs) != 1:
         fail(f"{path}: {job_name} must run exactly one `cargo publish -p {package} --locked`")
+    if require_publish_dry_run and len(publish_dry_runs) != 1:
+        fail(
+            f"{path}: {job_name} must run exactly one "
+            f"`cargo publish -p {package} --dry-run --locked` before minting OIDC"
+        )
 
     verify_step_names = {
         "Verify byte-identity vs the attested .crate",
         "Post-publish byte-identity (download from crates.io == attested)",
     }
     verify_steps: list[dict[str, Any]] = []
+    verify_step_indices: dict[str, int] = {}
     found_names: set[str] = set()
     for index, raw_step in enumerate(steps):
         step = mapping(raw_step, f"{path}: jobs.{job_name}.steps[{index}]")
         name = step.get("name")
         if name in verify_step_names:
             verify_steps.append(step)
+            verify_step_indices[name] = index
             found_names.add(name)
     if found_names != verify_step_names:
         fail(f"{path}: {job_name} must have both attested .crate verification steps")
+
+    if require_publish_dry_run:
+        dry_run_index = publish_dry_runs[0][0]
+        byte_identity_index = verify_step_indices["Verify byte-identity vs the attested .crate"]
+        if dry_run_index < byte_identity_index:
+            fail(f"{path}: {job_name} dry-run publish must run after byte-identity verification")
+        if auth_steps and dry_run_index > min(auth_steps):
+            fail(f"{path}: {job_name} dry-run publish must run before OIDC token minting")
 
     attested_path = f"${{RUNNER_TEMP}}/attested/{package}-${{VERSION}}.crate"
     for step in verify_steps:
@@ -986,6 +1191,21 @@ def check_publish_crate_job(
 
 def check_publish_crates(workflow: dict[str, Any], path: str) -> None:
     jobs = mapping(workflow.get("jobs"), f"{path}: jobs")
+    build_manifest_job = mapping(jobs.get("build-manifest-crate"), f"{path}: jobs.build-manifest-crate")
+    if not has_need(build_manifest_job, "publish-crate"):
+        fail(f"{path}: build-manifest-crate must need publish-crate so lockstep ordvec exists")
+    build_manifest_steps = sequence(
+        build_manifest_job.get("steps"), f"{path}: jobs.build-manifest-crate.steps"
+    )
+    build_manifest_packages = 0
+    for index, raw_step in enumerate(build_manifest_steps):
+        step = mapping(raw_step, f"{path}: jobs.build-manifest-crate.steps[{index}]")
+        run = step.get("run")
+        if isinstance(run, str) and has_cargo_command(run, "package", "ordvec-manifest"):
+            build_manifest_packages += 1
+    if build_manifest_packages != 1:
+        fail(f"{path}: build-manifest-crate must package ordvec-manifest after publish-crate")
+
     manifest_job = mapping(jobs.get("publish-manifest-crate"), f"{path}: jobs.publish-manifest-crate")
     if not has_need(manifest_job, "publish-crate"):
         fail(f"{path}: publish-manifest-crate must need publish-crate so ordvec publishes first")
@@ -1017,6 +1237,7 @@ def check_publish_crates(workflow: dict[str, Any], path: str) -> None:
         "publish-manifest-crate",
         "ordvec-manifest",
         "dist-manifest-crate",
+        require_publish_dry_run=True,
     )
 
 
@@ -1183,11 +1404,14 @@ def check_sde_cache_invariants() -> None:
 
 def main() -> None:
     workflow = load_workflow(WORKFLOW_PATH)
+    ci_workflow = load_workflow(CI_WORKFLOW_PATH)
     check_release_version_sync()
     check_release_compatibility_sync()
     check_publication_model()
     check_python_package_metadata()
     check_strict_release_tag_patterns(workflow, WORKFLOW_PATH)
+    check_package_contents()
+    check_ci_package_guards(ci_workflow, CI_WORKFLOW_PATH)
     check_hash_requirement_temp_paths(
         [WORKFLOW_PATH, PYTHON_WORKFLOW_PATH, CI_WORKFLOW_PATH, COVERAGE_WORKFLOW_PATH]
     )

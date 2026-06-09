@@ -275,6 +275,16 @@ check_crate_publish_job publish-crate ordvec dist-crate
 check_crate_publish_job publish-manifest-crate ordvec-manifest dist-manifest-crate
 job_needs publish-manifest-crate publish-crate \
   || fail "publish-manifest-crate must \`needs: publish-crate\` so the lockstep core crate publishes first"
+manifest_pre_line="$(require_job_line publish-manifest-crate '^[[:space:]]+- name:[[:space:]]*Verify byte-identity vs the attested \.crate' 'a manifest pre-publish byte-identity verification step')"
+manifest_dry_line="$(require_job_line publish-manifest-crate '^[[:space:]]+- name:[[:space:]]*Validate manifest publish dry-run' 'a manifest publish dry-run step')"
+manifest_oidc_line="$(require_job_line publish-manifest-crate '^[[:space:]]+- name:[[:space:]]*Mint a short-lived crates\.io credential' 'a manifest OIDC credential mint step')"
+printf '%s\n' "$(job_body publish-manifest-crate)" \
+  | awk '/cargo[[:space:]]+publish/ && /ordvec-manifest/ && /--dry-run/ && /--locked/ { found = 1 } END { exit found ? 0 : 1 }' \
+  || fail "publish-manifest-crate must dry-run \`cargo publish -p ordvec-manifest --dry-run --locked\` after byte-identity and before OIDC"
+[ "$manifest_pre_line" -lt "$manifest_dry_line" ] \
+  || fail "publish-manifest-crate must dry-run publish AFTER byte-identity verification"
+[ "$manifest_dry_line" -lt "$manifest_oidc_line" ] \
+  || fail "publish-manifest-crate must dry-run publish BEFORE minting the crates.io OIDC credential"
 
 pcd="$(job_body pypi-canonical-dist)"
 printf '%s\n' "$pcd" | grep -qE 'release_pypi_canonical_dist\.py canonicalize' \
