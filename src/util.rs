@@ -450,8 +450,11 @@ impl TopK {
             // order: a higher score, or an equal score with a lower row key.
             // Full-index scans use `doc_id` as the tie key. Subset scans use
             // global row IDs while still emitting local scratch-buffer indices.
-            let better =
-                score > self.worst_val || (score == self.worst_val && tie_key < self.worst_tie_key);
+            let better = match score.total_cmp(&self.worst_val) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => tie_key < self.worst_tie_key,
+                std::cmp::Ordering::Less => false,
+            };
             if better {
                 self.scores[self.worst_pos] = score;
                 self.indices[self.worst_pos] = id;
@@ -471,7 +474,12 @@ impl TopK {
         for i in 0..self.filled {
             let s = self.scores[i];
             let tie_key = self.tie_keys[i];
-            if s < wv || (s == wv && tie_key > wt) {
+            let worse = match s.total_cmp(&wv) {
+                std::cmp::Ordering::Less => true,
+                std::cmp::Ordering::Equal => tie_key > wt,
+                std::cmp::Ordering::Greater => false,
+            };
+            if worse {
                 wv = s;
                 wt = tie_key;
                 wp = i;

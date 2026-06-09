@@ -37,8 +37,9 @@ fn assert_score_then_id_order(scores: &[f32], ids: &[i64]) {
     for slot in 1..scores.len() {
         let prev = (scores[slot - 1], ids[slot - 1]);
         let cur = (scores[slot], ids[slot]);
+        let score_order = cur.0.total_cmp(&prev.0);
         assert!(
-            cur.0 < prev.0 || (cur.0 == prev.0 && cur.1 >= prev.1),
+            score_order.is_lt() || (score_order.is_eq() && cur.1 >= prev.1),
             "subset rerank violates score-desc/doc-id-asc order at slots {} and {slot}",
             slot - 1,
         );
