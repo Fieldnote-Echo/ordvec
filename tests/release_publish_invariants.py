@@ -114,6 +114,16 @@ def contains_text(value: Any, needle: str) -> bool:
     return isinstance(value, str) and needle in value
 
 
+def contains_nested_text(value: Any, needle: str) -> bool:
+    if isinstance(value, str):
+        return needle in value
+    if isinstance(value, dict):
+        return any(contains_nested_text(inner, needle) for inner in value.values())
+    if isinstance(value, list):
+        return any(contains_nested_text(inner, needle) for inner in value)
+    return False
+
+
 def read_text(path: str) -> str:
     try:
         with open(path, encoding="utf-8") as fh:
@@ -152,6 +162,8 @@ def shell_curl_commands(script: str) -> list[list[str]]:
             continue
         if line.startswith("if "):
             line = line[3:].strip()
+        if line.startswith("! "):
+            line = line[2:].strip()
         line = line.split("; then", 1)[0].strip().rstrip(";")
         try:
             words = shlex.split(line)
@@ -457,6 +469,16 @@ def check_sde_setup_action(path: str) -> None:
         fail(f"{path}: unreadable or invalid cached Intel SDE archives must be purged")
     if "continuing without updating cache" not in action_text:
         fail(f"{path}: Intel SDE cache population failures must be best-effort warnings")
+    required_outage_fragments = (
+        "allow-unavailable",
+        "sde-available=false",
+        "downloadmirror-challenge",
+        "x-amzn-waf-action",
+        "sha256sum -c -",
+    )
+    for fragment in required_outage_fragments:
+        if fragment not in action_text:
+            fail(f"{path}: Intel SDE outage softening must include {fragment!r}")
 
 
 def check_sde_cache_job(workflow: dict[str, Any], path: str, job_name: str) -> None:
@@ -512,6 +534,42 @@ def check_sde_cache_job(workflow: dict[str, Any], path: str, job_name: str) -> N
         fail(f"{path}: jobs.{job_name} setup-intel-sde must receive env.SDE_VERSION")
     if setup_with.get("sha256") != "${{ env.SDE_SHA256 }}":
         fail(f"{path}: jobs.{job_name} setup-intel-sde must receive env.SDE_SHA256")
+    if not boolish_true(setup_with.get("allow-unavailable")):
+        fail(f"{path}: jobs.{job_name} must explicitly opt into the temporary SDE outage valve")
+
+    available_if = "steps.sde.outputs.sde-available == 'true'"
+    unavailable_if = "steps.sde.outputs.sde-available != 'true'"
+    outage_notice_steps = []
+    for index, raw_step in enumerate(steps):
+        step = mapping(raw_step, f"{path}: jobs.{job_name}.steps[{index}]")
+        if step.get("if") == unavailable_if and contains_text(
+            step.get("run"), "Intel SDE archive unavailable"
+        ):
+            outage_notice_steps.append(step)
+    if len(outage_notice_steps) != 1:
+        fail(f"{path}: jobs.{job_name} must emit exactly one notice when Intel SDE is unavailable")
+
+    sde_guarded_names = {
+        "Install cargo-llvm-cov (pinned)",
+        "Sanity-check AVX-512 detection under SDE",
+        "sanity-check AVX-512 detection under SDE",
+        "Generate coverage (lcov) + enforce floor",
+        "Upload coverage to Codecov",
+        "cargo test under SDE (AVX-512 kernels)",
+    }
+    for index, raw_step in enumerate(steps):
+        step = mapping(raw_step, f"{path}: jobs.{job_name}.steps[{index}]")
+        name = step.get("name")
+        if (
+            name in sde_guarded_names
+            or contains_nested_text(step.get("env"), "steps.sde.outputs.sde-path")
+            or contains_text(step.get("run"), "SDE_PATH")
+        ):
+            if step.get("if") != available_if:
+                fail(
+                    f"{path}: {step_label(index, step)} must be guarded by "
+                    "steps.sde.outputs.sde-available"
+                )
 
 
 def check_sde_cache_invariants() -> None:
