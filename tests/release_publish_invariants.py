@@ -126,10 +126,28 @@ def shell_vars(name: str) -> set[str]:
     return {f"${name}", f"${{{name}}}"}
 
 
-def shell_curl_commands(script: str) -> list[list[str]]:
-    commands: list[list[str]] = []
+def shell_logical_lines(script: str) -> list[str]:
+    lines: list[str] = []
+    current = ""
     for raw_line in script.splitlines():
         line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("\\"):
+            current += line[:-1].strip() + " "
+            continue
+        current += line
+        if current:
+            lines.append(current.strip())
+        current = ""
+    if current:
+        lines.append(current.strip())
+    return lines
+
+
+def shell_curl_commands(script: str) -> list[list[str]]:
+    commands: list[list[str]] = []
+    for line in shell_logical_lines(script):
         if "curl" not in line:
             continue
         if line.startswith("if "):
@@ -415,10 +433,28 @@ def check_publish_crate(workflow: dict[str, Any], path: str) -> None:
 
 
 def check_sde_setup_action(path: str) -> None:
-    action_text = read_text(path)
+    action = load_workflow(path)
+    runs = mapping(action.get("runs"), f"{path}: runs")
+    steps = sequence(runs.get("steps"), f"{path}: runs.steps")
+    run_scripts = []
+    for index, raw_step in enumerate(steps):
+        step = mapping(raw_step, f"{path}: runs.steps[{index}]")
+        run = step.get("run")
+        if isinstance(run, str):
+            run_scripts.append(run)
+    curl_commands = [words for run in run_scripts for words in shell_curl_commands(run)]
+    download_curl_commands = [
+        words for words in curl_commands if any(word in shell_vars("download_url") for word in words)
+    ]
+    if len(download_curl_commands) != 1:
+        fail(f"{path}: Intel SDE setup action must have exactly one curl command for $download_url")
+    download_curl = download_curl_commands[0]
     for option in ("--connect-timeout", "--max-time", "--retry-max-time"):
-        if option not in action_text:
-            fail(f"{path}: Intel SDE download curl must set {option}")
+        if option not in download_curl:
+            fail(f"{path}: Intel SDE download curl must set {option} on the download command")
+    action_text = read_text(path)
+    if 'rm -f "${archive}" "${cached_archive}" || true' not in action_text:
+        fail(f"{path}: unreadable or invalid cached Intel SDE archives must be purged")
     if "continuing without updating cache" not in action_text:
         fail(f"{path}: Intel SDE cache population failures must be best-effort warnings")
 

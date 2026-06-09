@@ -64,7 +64,7 @@ runs:
             fi
           else
             echo "::warning::Cached Intel SDE archive could not be read; retrying download."
-            rm -f "${archive}" || true
+            rm -f "${archive}" "${cached_archive}" || true
           fi
         fi
 
