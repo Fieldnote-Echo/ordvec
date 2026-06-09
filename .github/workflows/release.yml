@@ -260,6 +260,8 @@ jobs:
     needs: [guard, publish-crate]
     if: needs.guard.outputs.ok == 'true'
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.guard.outputs.version }}
     steps:
       - name: Harden the runner
         uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
@@ -276,7 +278,19 @@ jobs:
         # version, so package it only after `publish-crate` has published and
         # verified the core crate. This is the first point where Cargo can
         # resolve the dependency through the registry for a fresh release.
-        run: cargo package -p ordvec-manifest --locked
+        run: |
+          set -euo pipefail
+          for i in {1..12}; do
+            if cargo package -p ordvec-manifest --locked; then
+              exit 0
+            fi
+            if [ "$i" -eq 12 ]; then
+              echo "::error::ordvec-manifest packaging did not resolve ordvec ${VERSION} after retries."
+              exit 1
+            fi
+            echo "waiting for crates.io to resolve ordvec ${VERSION} before manifest packaging (${i}/12)..."
+            sleep 10
+          done
       - name: Generate CycloneDX SBOM for the manifest crate
         run: |
           cargo install cargo-cyclonedx --version 0.5.9 --locked

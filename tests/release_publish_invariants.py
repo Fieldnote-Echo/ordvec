@@ -21,6 +21,7 @@ except ModuleNotFoundError:
 
 WORKFLOW_PATH = os.environ.get("RELEASE_WORKFLOW_PATH", ".github/workflows/release.yml")
 PYTHON_WORKFLOW_PATH = os.environ.get("PYTHON_WORKFLOW_PATH", ".github/workflows/python.yml")
+CI_WORKFLOW_PATH = os.environ.get("CI_WORKFLOW_PATH", ".github/workflows/ci.yml")
 
 
 def fail(message: str) -> None:
@@ -379,6 +380,9 @@ def has_cargo_package_arg(words: list[str], package: str) -> bool:
 
 def has_cargo_command(run: str, subcommand: str, package: str) -> bool:
     for line in shell_logical_lines(run):
+        if line.startswith("if "):
+            line = line[3:].strip()
+        line = line.split("; then", 1)[0].strip().rstrip(";")
         try:
             words = shlex.split(line)
         except ValueError:
@@ -681,6 +685,27 @@ def check_publish_crates(workflow: dict[str, Any], path: str) -> None:
     manifest_job = mapping(jobs.get("publish-manifest-crate"), f"{path}: jobs.publish-manifest-crate")
     if not has_need(manifest_job, "publish-crate"):
         fail(f"{path}: publish-manifest-crate must need publish-crate so ordvec publishes first")
+    build_manifest_job = mapping(jobs.get("build-manifest-crate"), f"{path}: jobs.build-manifest-crate")
+    if not has_need(build_manifest_job, "publish-crate"):
+        fail(f"{path}: build-manifest-crate must need publish-crate so lockstep ordvec exists")
+    build_env = mapping(build_manifest_job.get("env"), f"{path}: jobs.build-manifest-crate.env")
+    if build_env.get("VERSION") != "${{ needs.guard.outputs.version }}":
+        fail(f"{path}: build-manifest-crate must expose the release VERSION to retry diagnostics")
+    build_steps = sequence(
+        build_manifest_job.get("steps"), f"{path}: jobs.build-manifest-crate.steps"
+    )
+    build_manifest_packages = []
+    for index, raw_step in enumerate(build_steps):
+        step = mapping(raw_step, f"{path}: jobs.build-manifest-crate.steps[{index}]")
+        run = step.get("run")
+        if isinstance(run, str) and has_cargo_command(run, "package", "ordvec-manifest"):
+            build_manifest_packages.append(run)
+    if len(build_manifest_packages) != 1:
+        fail(f"{path}: build-manifest-crate must package ordvec-manifest after publish-crate")
+    build_run = build_manifest_packages[0]
+    for fragment in ("for i in {1..12}", "sleep 10", "ordvec ${VERSION}"):
+        if fragment not in build_run:
+            fail(f"{path}: build-manifest-crate package step must retry crates.io propagation")
     check_publish_crate_job(workflow, path, "publish-crate", "ordvec", "dist-crate")
     check_publish_crate_job(
         workflow,
@@ -691,6 +716,33 @@ def check_publish_crates(workflow: dict[str, Any], path: str) -> None:
     )
 
 
+def check_ci_manifest_package_defer(workflow: dict[str, Any], path: str) -> None:
+    jobs = mapping(workflow.get("jobs"), f"{path}: jobs")
+    deps_job = mapping(jobs.get("deps"), f"{path}: jobs.deps")
+    steps = sequence(deps_job.get("steps"), f"{path}: jobs.deps.steps")
+    manifest_package_runs = []
+    for index, raw_step in enumerate(steps):
+        step = mapping(raw_step, f"{path}: jobs.deps.steps[{index}]")
+        run = step.get("run")
+        if isinstance(run, str) and has_cargo_command(run, "package", "ordvec-manifest"):
+            manifest_package_runs.append(run)
+    if len(manifest_package_runs) != 1:
+        fail(f"{path}: deps job must run exactly one deferred ordvec-manifest package check")
+    run = manifest_package_runs[0]
+    if "grep" in run or "failed to select a version for the requirement" in run:
+        fail(f"{path}: deferred ordvec-manifest package check must not grep cargo errors")
+    required_fragments = (
+        "cargo metadata --no-deps --format-version 1",
+        "https://crates.io/api/v1/crates/ordvec/${core_version}",
+        '--write-out "%{http_code}"',
+        '[ "${status}" = "404" ]',
+        "not deferring a real packaging failure",
+    )
+    for fragment in required_fragments:
+        if fragment not in run:
+            fail(f"{path}: deferred ordvec-manifest package check must include {fragment!r}")
+
+
 def main() -> None:
     workflow = load_workflow(WORKFLOW_PATH)
     check_release_version_sync()
@@ -698,6 +750,7 @@ def main() -> None:
     check_aarch64_smoke_selector(workflow, WORKFLOW_PATH)
     check_pypi_canonical_dist(workflow, WORKFLOW_PATH)
     check_publish_crates(workflow, WORKFLOW_PATH)
+    check_ci_manifest_package_defer(load_workflow(CI_WORKFLOW_PATH), CI_WORKFLOW_PATH)
     check_publish_pypi(workflow, WORKFLOW_PATH)
 
 

@@ -265,14 +265,28 @@ jobs:
       - name: cargo package -p ordvec-manifest when lockstep core exists
         run: |
           set -euo pipefail
+          core_version="$(cargo metadata --no-deps --format-version 1 | python3 -c 'import json, sys; print(next(pkg["version"] for pkg in json.load(sys.stdin)["packages"] if pkg["name"] == "ordvec"))')"
           log="${RUNNER_TEMP}/ordvec-manifest-package.log"
           if cargo package -p ordvec-manifest --locked 2>&1 | tee "$log"; then
             exit 0
           fi
-          if grep -q 'failed to select a version for the requirement `ordvec = "' "$log"; then
+          status="$(curl \
+            --silent \
+            --show-error \
+            --location \
+            --connect-timeout 10 \
+            --max-time 60 \
+            --retry 3 \
+            --retry-all-errors \
+            --user-agent "ordvec-ci/${core_version} (https://github.com/Fieldnote-Echo/ordvec)" \
+            --output /dev/null \
+            --write-out "%{http_code}" \
+            "https://crates.io/api/v1/crates/ordvec/${core_version}" || true)"
+          if [ "${status}" = "404" ]; then
             echo "::notice::ordvec-manifest package check is deferred: the lockstep ordvec version is not published yet. release.yml packages ordvec-manifest after publish-crate succeeds."
             exit 0
           fi
+          echo "::error::ordvec-manifest package failed and ordvec ${core_version} registry status was ${status}; not deferring a real packaging failure."
           exit 1
 
   # ----------------------------------------------------------------------
