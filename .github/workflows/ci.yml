@@ -351,6 +351,8 @@ jobs:
         with:
           path: ~/.cache/ordvec-intel-sde
           key: intel-sde-${{ runner.os }}-${{ runner.arch }}-${{ env.SDE_VERSION }}-${{ env.SDE_SHA256 }}
+          restore-keys: |
+            intel-sde-${{ runner.os }}-${{ runner.arch }}-
       - name: install Intel SDE
         id: sde
         uses: ./.github/actions/setup-intel-sde

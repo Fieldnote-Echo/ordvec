@@ -495,6 +495,13 @@ def check_sde_cache_job(workflow: dict[str, Any], path: str, job_name: str) -> N
             f"{path}: jobs.{job_name} Intel SDE cache key must be version+sha pinned, "
             "not action-file-hash based"
         )
+    restore_keys = str(cache_with.get("restore-keys") or "")
+    expected_restore_key = "intel-sde-${{ runner.os }}-${{ runner.arch }}-"
+    if expected_restore_key not in {line.strip() for line in restore_keys.splitlines()}:
+        fail(
+            f"{path}: jobs.{job_name} Intel SDE cache restore-keys must include "
+            "the runner OS/arch prefix"
+        )
     if contains_text(key, "hashFiles") or contains_text(key, "setup-intel-sde/action.yml"):
         fail(f"{path}: jobs.{job_name} Intel SDE cache key must not hash the action file")
 
