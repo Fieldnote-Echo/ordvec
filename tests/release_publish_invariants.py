@@ -896,6 +896,38 @@ def readback_curl_uses(words: list[str], url_var: str) -> bool:
     )
 
 
+def recovery_curl_uses(words: list[str], url_var: str) -> bool:
+    return (
+        has_shell_arg(words, shell_vars(url_var))
+        and has_shell_option_value(words, {"--user-agent", "-A"}, shell_vars("CRATES_IO_USER_AGENT"))
+        and has_shell_option_value(words, {"--output", "-o"}, shell_vars("EXISTING"))
+        and has_shell_option_value(words, {"--write-out", "-w"}, {"%{http_code}"})
+        and "--retry" in words
+        and "--retry-all-errors" in words
+    )
+
+
+def check_crate_recovery_status_handling(
+    recovery_run: str, path: str, job_name: str, package: str
+) -> None:
+    required_fragments = (
+        "API_CURL_EXIT=0",
+        'if [ "$API_CURL_EXIT" -ne 0 ]; then',
+        "STATIC_CURL_EXIT=0",
+        'if [ "$STATIC_CURL_EXIT" -ne 0 ]; then',
+        'case "$API_STATUS" in',
+        'case "$STATIC_STATUS" in',
+        "200)",
+        "404)",
+        "could not determine crates.io status",
+        "unexpected crates.io status",
+        f"Both crates.io recovery endpoints returned 404 for {package}",
+    )
+    for fragment in required_fragments:
+        if fragment not in recovery_run:
+            fail(f"{path}: {job_name} recovery step must contain {fragment!r}")
+
+
 def check_hash_requirement_temp_paths(paths: list[str]) -> None:
     for path in paths:
         workflow_text = read_text(path)
@@ -1295,18 +1327,14 @@ def check_publish_crate_job(
     ):
         if required not in recovery_run:
             fail(f"{path}: {job_name} recovery step must contain {required!r}")
+    check_crate_recovery_status_handling(recovery_run, path, job_name, package)
     for url_var in ("API_URL", "STATIC_URL"):
         if not any(
-            has_shell_arg(words, shell_vars(url_var))
-            and has_shell_option_value(
-                words, {"--user-agent", "-A"}, shell_vars("CRATES_IO_USER_AGENT")
-            )
-            and has_shell_option_value(words, {"--output", "-o"}, shell_vars("EXISTING"))
-            for words in shell_curl_commands(recovery_run)
+            recovery_curl_uses(words, url_var) for words in shell_curl_commands(recovery_run)
         ):
             fail(
                 f"{path}: {job_name} recovery step must curl ${url_var} "
-                "with CRATES_IO_USER_AGENT into $EXISTING"
+                "with CRATES_IO_USER_AGENT into $EXISTING, capture HTTP status, and retry"
             )
 
     protected_step_names = {
@@ -1424,18 +1452,16 @@ def check_publish_crates(workflow: dict[str, Any], path: str) -> None:
     ):
         if required not in recovery_run:
             fail(f"{path}: manifest crate recovery step must contain {required!r}")
+    check_crate_recovery_status_handling(
+        recovery_run, path, "publish-manifest-crate", "ordvec-manifest"
+    )
     for url_var in ("API_URL", "STATIC_URL"):
         if not any(
-            has_shell_arg(words, shell_vars(url_var))
-            and has_shell_option_value(
-                words, {"--user-agent", "-A"}, shell_vars("CRATES_IO_USER_AGENT")
-            )
-            and has_shell_option_value(words, {"--output", "-o"}, shell_vars("EXISTING"))
-            for words in shell_curl_commands(recovery_run)
+            recovery_curl_uses(words, url_var) for words in shell_curl_commands(recovery_run)
         ):
             fail(
                 f"{path}: manifest crate recovery step must curl ${url_var} "
-                "with CRATES_IO_USER_AGENT into $EXISTING"
+                "with CRATES_IO_USER_AGENT into $EXISTING, capture HTTP status, and retry"
             )
     for index, raw_step in enumerate(manifest_steps):
         step = mapping(raw_step, f"{path}: jobs.publish-manifest-crate.steps[{index}]")
