@@ -673,14 +673,19 @@ def check_ci_package_guards(workflow: dict[str, Any], path: str) -> None:
         fail(f"{path}: deps job must run exactly one deferred ordvec-manifest package check")
 
     manifest_run = manifest_deferred_runs[0]
+    if "grep" in manifest_run or "failed to select a version for the requirement" in manifest_run:
+        fail(f"{path}: deferred ordvec-manifest package check must not grep cargo errors")
     required_fragments = (
-        'failed to select a version for the requirement `ordvec = "',
+        "cargo metadata --no-deps --format-version 1",
+        "https://crates.io/api/v1/crates/ordvec/${core_version}",
+        '--write-out "%{http_code}"',
+        '[ "${status}" = "404" ]',
         "ordvec-manifest package check is deferred",
-        "release.yml packages ordvec-manifest after publish-crate succeeds",
+        "not deferring a real packaging failure",
     )
     for fragment in required_fragments:
         if fragment not in manifest_run:
-            fail(f"{path}: deferred ordvec-manifest package check must mention {fragment!r}")
+            fail(f"{path}: deferred ordvec-manifest package check must include {fragment!r}")
 
 
 def shell_vars(name: str) -> set[str]:
