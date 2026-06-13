@@ -24,7 +24,7 @@ tiered below by **what survived scrutiny**. Read the tiers, not all 11 docs.
 |-----|-------|
 | [density_collapse_results.md](density_collapse_results.md) | **Mechanism.** RankQuant b=2 density collapse = Hamming-near codes the scorer can't separate. Among those lookalikes, true neighbours have lower intra-code Kendall-tau (gap ≈ 0.04, CI > 0). Real but small. |
 | [tau_rerank_bakeoff_results.md](tau_rerank_bakeoff_results.md) | **The verdict.** Does that tau signal beat b=4? NO — b=4 wins even at the tau ceiling; tau scores below b=2's own ordering. Signal is real-but-inert; just use b=4. Closes the line: research, not a feature. |
-| [crt_seam_oracle_results.md](crt_seam_oracle_results.md) | CRT vernier seam theorem — exhaustive finite proof: lcm spacing, one coincidence/period, capped density `∏min(2t+1,m_i)/m_i`. Lean 4 skeleton in [lean/](lean/). |
+| [crt_seam_oracle_results.md](crt_seam_oracle_results.md) | CRT vernier seam theorem — exhaustive finite proof: lcm spacing, one coincidence/period, capped density `∏min(2t+1,m_i)/m_i`. Lean 4 formalization lives in the companion repo: [ordvec-formalization#17](https://github.com/Fieldnote-Echo/ordvec-formalization/pull/17) (draft). |
 | [twonn_id_results.md](twonn_id_results.md) | TwoNN intrinsic-dimension probe (chord-metric fix, sphere-validated). `nomic-embed-text` ID ≈ 13 / 768. Estimator-bias caveat noted. |
 | [shard_recall_results.md](shard_recall_results.md) | Controlled ablation (post RNG-desync fix): random phase offsets add nothing vs aligned grids across R random directions. |
 
