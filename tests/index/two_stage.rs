@@ -2,6 +2,8 @@ use ordvec::{
     validate_candidate_ids, validate_flat_vectors_len, Bitmap, OrdvecError, RankQuant, SignBitmap,
     TwoStageCandidatePolicy,
 };
+use rand::{RngExt, SeedableRng};
+use rand_chacha::ChaCha8Rng;
 
 use crate::{make_corpus, D, N};
 
@@ -621,4 +623,61 @@ fn batched_serial_wrapper_matches_into_and_full_set_matches_search_asymmetric() 
         "full-set batched subset must equal search_asymmetric"
     );
     assert_eq!(res_full.scores, asym.scores);
+}
+
+/// Cross-tier: batched subset rerank's top-k SET + order must match the scalar
+/// byte-LUT reference (`search_asymmetric_byte_lut`) across dims that route to
+/// different kernels (dim%64 → AVX-512; %16-not-%64 b=2 → AVX2; non-%16 → scalar).
+/// Scores compared within the existing kernel parity tolerance, NOT byte-identical
+/// across tiers. (Same convention as redteam_beta + determinism_contract.)
+#[test]
+fn batched_subset_rerank_matches_scalar_reference_across_tiers() {
+    use ordvec::search_asymmetric_byte_lut;
+    for dim in [64usize, 80, 128] {
+        // 64 → AVX-512-eligible; 80 → %16 (AVX2 b=2) not %64; 128 → AVX-512.
+        let n = 64usize;
+        let mut rng = ChaCha8Rng::seed_from_u64(0xA11C + dim as u64);
+        let corpus: Vec<f32> = (0..n * dim).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let mut rq = RankQuant::new(dim, 2);
+        rq.add(&corpus);
+        let query: Vec<f32> = (0..dim).map(|_| rng.random_range(-1.0..1.0)).collect();
+        let k = 8usize;
+        let full: Vec<u32> = (0..n as u32).collect();
+        let off = vec![0usize, full.len()];
+        let res = rq.search_asymmetric_subset_batched_serial(&query, &off, &full, k);
+        let reference = search_asymmetric_byte_lut(&rq, &query, k);
+
+        use std::collections::HashSet;
+        let got: HashSet<i64> = res.indices.iter().copied().filter(|&x| x >= 0).collect();
+        let want: HashSet<i64> = reference
+            .indices
+            .iter()
+            .copied()
+            .filter(|&x| x >= 0)
+            .collect();
+        assert_eq!(
+            got, want,
+            "dim={dim}: top-k set diverged from scalar reference"
+        );
+        // Tie/order policy: scores non-increasing, ids ascending within equal scores.
+        assert_score_then_id_order(&res.scores, &res.indices);
+        // Scores within tolerance (NOT byte-identical across tiers).
+        for slot in 0..k {
+            let a = res.scores[slot];
+            // find matching id in reference to compare its score
+            if res.indices[slot] >= 0 {
+                let rpos = reference
+                    .indices
+                    .iter()
+                    .position(|&x| x == res.indices[slot]);
+                if let Some(p) = rpos {
+                    let b = reference.scores[p];
+                    assert!(
+                        (a - b).abs() <= 1e-4,
+                        "dim={dim} slot{slot}: score {a} vs ref {b}"
+                    );
+                }
+            }
+        }
+    }
 }
