@@ -285,29 +285,29 @@ fn build_keys(cfg: &Cfg) -> (Vec<Vec<f64>>, usize) {
             // the knot smoothing does not wash out the signal being measured.
             let k = cfg.unfold_smooth_knots.min(cfg.n);
             let n = cfg.n;
-            // knot j (0..=k): rank index kr = j*n/k, key value = keys[kr], maps
-            // to unfolded position j*n/k. Each key unfolds by linear interp of
-            // its bracketing knots in VALUE space onto POSITION space.
-            let knot_rank = |j: usize| -> usize { (j * n / k).min(n - 1) };
+            // Precompute the k+1 knots once: (position p_j = rank j*n/k, value
+            // keys[p_j]). Avoids recomputing knot_rank (div/mul/min) and
+            // re-indexing keys inside the per-key binary search (review).
+            let kr = |j: usize| -> usize { (j * n / k).min(n - 1) };
+            let knot_pos: Vec<f64> = (0..=k).map(|j| kr(j) as f64).collect();
+            let knot_val: Vec<f64> = (0..=k).map(|j| keys[kr(j)]).collect();
             let unfolded: Vec<f64> = keys
                 .iter()
                 .map(|&x| {
-                    // find bracketing knots by value (knots are sorted in value)
-                    // binary search over knot index
+                    // bracketing knot index by value (knots sorted ascending)
                     let mut lo = 0usize;
                     let mut hi = k;
                     while lo < hi {
                         let mid = (lo + hi) / 2;
-                        if keys[knot_rank(mid)] < x {
+                        if knot_val[mid] < x {
                             lo = mid + 1;
                         } else {
                             hi = mid;
                         }
                     }
                     let j = lo.clamp(1, k);
-                    let (v0, v1) = (keys[knot_rank(j - 1)], keys[knot_rank(j)]);
-                    let (p0, p1) =
-                        (knot_rank(j - 1) as f64, knot_rank(j) as f64);
+                    let (v0, v1) = (knot_val[j - 1], knot_val[j]);
+                    let (p0, p1) = (knot_pos[j - 1], knot_pos[j]);
                     if (v1 - v0).abs() < 1e-30 {
                         p0
                     } else {

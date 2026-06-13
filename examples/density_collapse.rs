@@ -105,7 +105,7 @@ fn kendall_tau(a: &[f32], b: &[f32], coords: &[usize]) -> f32 {
 /// Indices of the top-k coordinates of a vector by value (descending).
 fn top_coords(v: &[f32], k: usize) -> Vec<usize> {
     let mut idx: Vec<usize> = (0..v.len()).collect();
-    idx.sort_by(|&i, &j| v[j].partial_cmp(&v[i]).unwrap());
+    idx.sort_by(|&i, &j| v[j].partial_cmp(&v[i]).unwrap_or(std::cmp::Ordering::Equal));
     idx.truncate(k);
     idx
 }

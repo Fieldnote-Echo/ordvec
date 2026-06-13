@@ -207,7 +207,7 @@ fn nn_ratios(corpus: &[f32], n: usize, dim: usize) -> Vec<f64> {
 /// closed-form slope d = Σ x·y / Σ x².
 fn twonn_fit(mus: &[f64]) -> f64 {
     let mut m: Vec<f64> = mus.to_vec();
-    m.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    m.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     let n = m.len();
     let keep = ((n as f64) * 0.9) as usize; // trim top 10% tail
     let (mut sxx, mut sxy) = (0.0f64, 0.0f64);

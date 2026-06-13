@@ -294,12 +294,14 @@ fn build_projs(cfg: &Cfg, arm: Arm, r: usize, base_width: f32) -> Vec<Proj> {
             // draw a phase fraction for EVERY arm (keeps phase_rng in lockstep);
             // arms that don't use it simply ignore the value.
             let p: f32 = phase_rng.random_range(0.0..1.0);
+            // i % len() guards against r > COPRIME_PERIODS.len() (OOB panic).
+            let period = COPRIME_PERIODS[i % COPRIME_PERIODS.len()] as f32;
             let (width, phase) = match arm {
-                Arm::Coprime => (base_width / COPRIME_PERIODS[i] as f32, 0.0),
+                Arm::Coprime => (base_width / period, 0.0),
                 Arm::Aligned => (base_width, 0.0),
                 Arm::RandomOffset => (base_width, p * base_width),
                 Arm::Both => {
-                    let w = base_width / COPRIME_PERIODS[i] as f32;
+                    let w = base_width / period;
                     (w, p * w)
                 }
             };
@@ -347,9 +349,10 @@ fn probe_recall(
             }
         }
     }
-    let truth_set: HashSet<u32> = truth.iter().map(|&i| i as u32).collect();
-    let hits = truth_set.iter().filter(|i| cand.contains(i)).count();
-    let recall = hits as f32 / truth_set.len().max(1) as f32;
+    // truth is already unique ground-truth ids; filter directly against cand
+    // (no separate HashSet allocation — review suggestion).
+    let hits = truth.iter().filter(|&&i| cand.contains(&(i as u32))).count();
+    let recall = hits as f32 / truth.len().max(1) as f32;
     (cand.len(), recall)
 }
 

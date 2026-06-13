@@ -53,11 +53,13 @@ theorem card_admissible {m t : ℕ} (h : 2 * t + 1 ≤ m) :
 /-! ## Product-space count (coprimality NOT used) -/
 
 /-- The joint blind spot over the residue PRODUCT space has cardinality
-    `∏ (2t+1)`. True for any family — carries no coprimality hypothesis, which
-    is the honest statement of what this half proves (it is `Fintype.card_piFinset`,
-    not CRT). -/
+    `∏ (2t+1)`. Carries no COPRIMALITY hypothesis (that is the honest statement
+    of what this half proves — `Fintype.card_piFinset`, not CRT), but it DOES
+    need `[∀ i, NeZero (m i)]`: `ZMod 0` is infinite and has no `Fintype`
+    instance, so `Finset.univ` / `Fintype.piFinset` would not typecheck without
+    it. (Caught by code review.) -/
 theorem blindspot_card_product
-    {L : ℕ} (m : Fin L → ℕ) (t : ℕ) (hband : ∀ i, 2 * t + 1 ≤ m i) :
+    {L : ℕ} (m : Fin L → ℕ) [∀ i, NeZero (m i)] (t : ℕ) (hband : ∀ i, 2 * t + 1 ≤ m i) :
     (Finset.univ.filter
         (fun r : ∀ i, ZMod (m i) => ∀ i, r i ∈ admissible (m i) t)).card
       = ∏ i, (2 * t + 1) := by
