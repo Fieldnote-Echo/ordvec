@@ -759,7 +759,11 @@ impl RankQuant {
         let out_k = out_scores.len();
         debug_assert_eq!(out_indices.len(), out_k);
         if out_k == 0 || m == 0 {
-            // Caller has already sentinel-precleared the row.
+            // Caller has already sentinel-precleared the row, so returning here
+            // (before resetting `scratch.top`) is safe: an empty row never reads
+            // `scratch.top`, and every subsequent non-empty row calls
+            // `reset_with_tie_keys` before use, so the stale collector state left
+            // over from a previous row is never observed.
             return;
         }
         let norm = rankquant_norm(dim, bits);

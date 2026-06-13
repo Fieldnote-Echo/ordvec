@@ -106,9 +106,6 @@ pub(crate) fn l2_normalise(v: &[f32]) -> Vec<f32> {
 /// Allocation-free counterpart of [`l2_normalise`]: writes the L2-normalised
 /// vector into `out`, reusing its capacity. Same semantics as `l2_normalise`
 /// (a near-zero-norm input yields all zeros of the same length).
-// First non-test caller arrives in Task 5 (subset-rerank row helper); this
-// `allow` keeps the intermediate commit warning-clean and is removed then.
-#[allow(dead_code)]
 pub(crate) fn l2_normalise_into(out: &mut Vec<f32>, v: &[f32]) {
     out.clear();
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
@@ -513,25 +510,6 @@ impl TopK {
         self.worst_val = wv;
         self.worst_tie_key = wt;
         self.worst_pos = wp;
-    }
-
-    /// Reset to an empty top-k collector of capacity `k`, reusing buffers.
-    /// No tie-key remap (tie key = the inserted index / doc id).
-    #[allow(dead_code)]
-    pub(crate) fn reset(&mut self, k: usize) {
-        self.k = k;
-        self.scores.clear();
-        self.scores.resize(k, f32::NEG_INFINITY);
-        self.indices.clear();
-        self.indices.resize(k, -1);
-        self.tie_keys.clear();
-        self.tie_keys.resize(k, i64::MAX);
-        self.tie_key_by_index = None;
-        self.score_offset = 0.0;
-        self.filled = 0;
-        self.worst_pos = 0;
-        self.worst_val = f32::INFINITY;
-        self.worst_tie_key = i64::MAX;
     }
 
     /// Reset to an empty top-k collector of capacity `k` whose score ties are
