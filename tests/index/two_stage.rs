@@ -577,3 +577,48 @@ fn batched_into_is_allocation_free_after_warmup() {
         "scratch must reuse capacity (allocation-free)"
     );
 }
+
+#[test]
+fn batched_serial_wrapper_matches_into_and_full_set_matches_search_asymmetric() {
+    let (sign, rq, _corpus) = build_two_stage(2);
+    let nq = 4usize;
+    let queries = make_corpus(70_001)[..nq * D].to_vec();
+    let k = 6usize;
+    let rows: Vec<Vec<u32>> = (0..nq)
+        .map(|qi| sign.top_m_candidates(&queries[qi * D..(qi + 1) * D], 25))
+        .collect();
+    let (cand, off) = flatten_to_csr(&rows);
+
+    let res = rq.search_asymmetric_subset_batched_serial(&queries, &off, &cand, k);
+    let out_k = k.min(N);
+    assert_eq!(res.nq, nq);
+    assert_eq!(res.k, out_k);
+
+    // == *_into
+    let mut s = vec![0.0f32; nq * out_k];
+    let mut i = vec![0i64; nq * out_k];
+    let mut scratch = ordvec::SubsetScratch::new();
+    rq.search_asymmetric_subset_batched_serial_into(
+        &queries,
+        &off,
+        &cand,
+        k,
+        &mut scratch,
+        &mut s,
+        &mut i,
+    );
+    assert_eq!(res.scores, s);
+    assert_eq!(res.indices, i);
+
+    // Full candidate set per row (0..N) == search_asymmetric.
+    let full: Vec<u32> = (0..N as u32).collect();
+    let full_rows: Vec<Vec<u32>> = (0..nq).map(|_| full.clone()).collect();
+    let (fc, fo) = flatten_to_csr(&full_rows);
+    let res_full = rq.search_asymmetric_subset_batched_serial(&queries, &fo, &fc, k);
+    let asym = rq.search_asymmetric(&queries, k);
+    assert_eq!(
+        res_full.indices, asym.indices,
+        "full-set batched subset must equal search_asymmetric"
+    );
+    assert_eq!(res_full.scores, asym.scores);
+}

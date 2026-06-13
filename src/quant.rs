@@ -943,6 +943,46 @@ impl RankQuant {
         }
     }
 
+    /// Allocating ergonomic wrapper over
+    /// [`Self::search_asymmetric_subset_batched_serial_into`]. Allocates the
+    /// output `SearchResults` and a transient `SubsetScratch`. NO rayon.
+    /// `result.k == k.min(self.len())`.
+    pub fn search_asymmetric_subset_batched_serial(
+        &self,
+        queries: &[f32],
+        candidate_offsets: &[usize],
+        candidates: &[u32],
+        k: usize,
+    ) -> SearchResults {
+        let dim = self.dim;
+        assert!(
+            queries.len().is_multiple_of(dim),
+            "queries length {} must be a multiple of dim {dim}",
+            queries.len()
+        );
+        let nq = queries.len() / dim;
+        let out_k = k.min(self.n_vectors);
+        let buf_len = result_buffer_len(nq, out_k);
+        let mut scores = vec![f32::NEG_INFINITY; buf_len];
+        let mut indices = vec![-1i64; buf_len];
+        let mut scratch = SubsetScratch::new();
+        self.search_asymmetric_subset_batched_serial_into(
+            queries,
+            candidate_offsets,
+            candidates,
+            k,
+            &mut scratch,
+            &mut scores,
+            &mut indices,
+        );
+        SearchResults {
+            scores,
+            indices,
+            nq,
+            k: out_k,
+        }
+    }
+
     pub fn try_search_with_sign_probe(
         &self,
         sign_probe: &SignBitmap,
