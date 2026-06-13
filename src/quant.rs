@@ -892,11 +892,15 @@ impl RankQuant {
     /// == nq + 1`, row `qi` is `candidates[candidate_offsets[qi]..candidate_offsets[qi+1]]`.
     /// Output is rectangular: `out_k = k.min(self.len())`, and both output
     /// buffers MUST have length `nq * out_k`. Underfull rows are sentinel-padded
-    /// (`NEG_INFINITY` / `-1`). Duplicate candidate ids are scored independently.
+    /// (`NEG_INFINITY` / `-1`). Duplicate candidate ids are scored independently
+    /// — but each CSR row's length (duplicates included) must be `<= self.len()`;
+    /// deduplicate a duplicate-heavy row before calling if it would exceed that.
     /// Tie policy: `(score desc, global row-id asc)`.
     ///
-    /// Panics on any contract violation (CSR malformed, candidate id out of
-    /// range, non-finite query, wrong output-buffer length).
+    /// Panics on any contract violation: malformed CSR (`candidate_offsets` not
+    /// `nq + 1` long, not starting at `0`, non-monotonic, or not ending at
+    /// `candidates.len()`), a row longer than `self.len()`, a candidate id
+    /// `>= self.len()`, a non-finite query value, or a wrong output-buffer length.
     #[allow(clippy::too_many_arguments)] // arity is intrinsic to the caller-owned buffered contract (CSR inputs + scratch + two output buffers)
     pub fn search_asymmetric_subset_batched_serial_into(
         &self,
@@ -961,7 +965,9 @@ impl RankQuant {
     /// Allocating ergonomic wrapper over
     /// [`Self::search_asymmetric_subset_batched_serial_into`]. Allocates the
     /// output `SearchResults` and a transient `SubsetScratch`. NO rayon.
-    /// `result.k == k.min(self.len())`.
+    /// `result.k == k.min(self.len())`. Shares the CSR/validation contract (and
+    /// panic conditions, incl. the per-row `len <= self.len()` cap) of
+    /// [`Self::search_asymmetric_subset_batched_serial_into`].
     ///
     /// # Example
     /// ```no_run
