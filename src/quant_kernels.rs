@@ -572,8 +572,11 @@ pub(crate) fn scan_b8_asym(
     let lut = build_b8_asym_lut(q_unit);
     #[cfg(target_arch = "x86_64")]
     {
-        if is_x86_feature_detected!("avx512f") && dim.is_multiple_of(16) {
-            // SAFETY: `avx512f` is confirmed by the runtime detection above
+        if is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512bw")
+            && dim.is_multiple_of(16)
+        {
+            // SAFETY: `avx512f`+`avx512bw` are confirmed by the runtime detection above
             // and `dim % 16 == 0` satisfies the kernel's lane invariant;
             // `packed.len() == n * dim` and `lut.len() == dim * 256` hold by
             // construction (b=8 packs one byte/coord; the LUT is built just
@@ -609,14 +612,18 @@ pub(crate) fn scan_b8_asym(
 // trick: the asymmetric LUT bakes the per-coordinate query weight in, so
 // there is no per-query constant offset to reapply at finalize.
 //
-// Caller must verify `is_x86_feature_detected!("avx512f")` once. The LUT
-// is the same `dim * 256` f32 layout the scalar `scan_b8_to_topk` consumes,
-// so the two paths are score-parity (modulo f32 summation order, within
-// the crate's 1e-4 cross-backend tolerance).
+// Caller must verify `is_x86_feature_detected!("avx512f") && ..("avx512bw")`
+// once. `avx512bw` is gated alongside `avx512f` to match the rest of the
+// crate's AVX-512 kernels (which require `avx512dq`) and to keep the byte
+// widening (`_mm512_cvtepu8_epi32`) conservatively gated — the F-without-BW
+// CPUs (KNL/KNM) are already excluded by the crate's `dq` requirement, so this
+// adds no real exclusion. The LUT is the same `dim * 256` f32 layout the scalar
+// `scan_b8_to_topk` consumes, so the two paths are score-parity (modulo f32
+// summation order, within the crate's 1e-4 cross-backend tolerance).
 // -------------------------------------------------------------------
 
 #[cfg(target_arch = "x86_64")]
-#[target_feature(enable = "avx512f")]
+#[target_feature(enable = "avx512f,avx512bw")]
 pub(crate) unsafe fn scan_b8_asym_avx512_gather(
     packed: &[u8],
     n: usize,
@@ -740,8 +747,8 @@ mod b8_gather_tests {
     /// dim=400 (`400 % 16 == 0`, `400 % 64 == 16`).
     #[test]
     fn b8_gather_matches_scalar_reference() {
-        if !is_x86_feature_detected!("avx512f") {
-            eprintln!("skipping b8 gather parity: no avx512f on this host");
+        if !(is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw")) {
+            eprintln!("skipping b8 gather parity: no avx512f+avx512bw on this host");
             return;
         }
         for &dim in &[384usize, 400, 768, 1024, 1536] {
@@ -800,7 +807,7 @@ mod b8_gather_tests {
     /// scaled scores, which the parity test above covers.
     #[test]
     fn b8_gather_raw_score_is_exact_gather_sum() {
-        if !is_x86_feature_detected!("avx512f") {
+        if !(is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512bw")) {
             return;
         }
         let dim = 256usize;
@@ -860,8 +867,9 @@ mod b8_gather_tests {
         use crate::quant_kernels::{scan_b4_asym_avx512, scan_b8_asym_avx512_gather};
         use std::time::Instant;
 
-        let have_avx512 =
-            is_x86_feature_detected!("avx512f") && is_x86_feature_detected!("avx512dq");
+        let have_avx512 = is_x86_feature_detected!("avx512f")
+            && is_x86_feature_detected!("avx512dq")
+            && is_x86_feature_detected!("avx512bw"); // b=4 path needs dq, b=8 gather needs bw
         let dim = 1024usize; // % 64 == 0 → valid for both b=4 and b=8 SIMD
         let n = 50_000usize;
         let k = 10usize;
