@@ -453,6 +453,71 @@ fn batched_into_preserves_duplicate_candidates() {
 }
 
 #[test]
+fn batched_into_is_order_independent_for_unsorted_candidate_rows() {
+    // Contract (doc'd on `search_asymmetric_subset_batched_serial_into`):
+    // candidate ids within a row need NOT be sorted, and input order has no
+    // effect on results — output is fully determined by the tie policy
+    // (score desc, then global doc-id asc). Pin it: feed the same candidate
+    // set in two different orders and require byte-identical output. bits=1
+    // exercises the tie-break path directly (coarse quantization ties scores,
+    // so ordering is decided by doc-id, not input position).
+    for bits in [1u8, 2, 4] {
+        let (sign, rq, _corpus) = build_two_stage(bits);
+        let q = make_corpus(73_000 + bits as u64)[..D].to_vec();
+        let k = 6usize;
+        let out_k = k.min(N);
+
+        // A real candidate shortlist (probe order)...
+        let row = sign.top_m_candidates(&q, 12);
+        assert!(row.len() >= 2, "need a non-trivial row to permute");
+        // ...and a non-identity permutation of the SAME ids.
+        let mut shuffled = row.clone();
+        shuffled.reverse();
+        assert_ne!(row, shuffled, "reversed row must differ from original");
+
+        let run = |cand_row: &[u32]| {
+            let rows = vec![cand_row.to_vec()];
+            let (cand, off) = flatten_to_csr(&rows);
+            let mut scores = vec![0.0f32; out_k];
+            let mut indices = vec![0i64; out_k];
+            let mut scratch = ordvec::SubsetScratch::new();
+            rq.search_asymmetric_subset_batched_serial_into(
+                &q,
+                &off,
+                &cand,
+                k,
+                &mut scratch,
+                &mut scores,
+                &mut indices,
+            );
+            (scores, indices)
+        };
+
+        let (s0, i0) = run(&row);
+        let (s1, i1) = run(&shuffled);
+
+        assert_eq!(
+            i0, i1,
+            "bits={bits}: output ids must not depend on input order"
+        );
+        assert_eq!(
+            s0, s1,
+            "bits={bits}: output scores must not depend on input order"
+        );
+        assert_score_then_id_order(&s0, &i0);
+
+        // ...and matches the single-query reference (sorted output regardless).
+        let (es, ei) = rq.search_asymmetric_subset(&q, &row, k);
+        assert_eq!(
+            &i0[..ei.len()],
+            &ei[..],
+            "bits={bits}: must match single-query"
+        );
+        assert_eq!(&s0[..es.len()], &es[..]);
+    }
+}
+
+#[test]
 fn batched_into_edges() {
     let (_sign, rq, _corpus) = build_two_stage(2);
     let mut scratch = ordvec::SubsetScratch::new();

@@ -895,7 +895,9 @@ impl RankQuant {
     /// (`NEG_INFINITY` / `-1`). Duplicate candidate ids are scored independently
     /// — but each CSR row's length (duplicates included) must be `<= self.len()`;
     /// deduplicate a duplicate-heavy row before calling if it would exceed that.
-    /// Tie policy: `(score desc, global row-id asc)`.
+    /// Candidate ids within a row need not be sorted: input order has no effect
+    /// on results — the tie policy `(score desc, global row-id asc)` fully
+    /// determines output order (matching [`Self::search_asymmetric_subset`]).
     ///
     /// Panics on any contract violation: malformed CSR (`candidate_offsets` not
     /// `nq + 1` long, not starting at `0`, non-monotonic, or not ending at
