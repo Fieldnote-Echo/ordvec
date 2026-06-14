@@ -19,7 +19,14 @@ are scored as duplicate candidate entries and may produce duplicate hits.
 `k` is clamped to the search space before result buffers are allocated. A
 full-index search space is the number of indexed rows. A subset search space is
 the candidate-list length. If the effective `k` is zero, or the search space is
-empty, search returns an empty result shape rather than padded sentinel hits.
+empty, the **allocating** search APIs return an empty result shape rather than
+padded sentinel hits.
+
+The caller-owned `RankQuant::search_asymmetric_subset_batched_serial_into` is the
+deliberate exception: it writes into a fixed, caller-sized rectangular
+`nq * k.min(len)` grid, so empty and underfull rows are **sentinel-padded**
+(`-1` indices / `NEG_INFINITY` scores) rather than shortened. The padded cells
+carry no ranking meaning; they pad the row to the fixed width.
 
 ## Backend Scope
 
