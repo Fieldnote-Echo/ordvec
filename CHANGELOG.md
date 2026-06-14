@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Fixed
+
+- **`ordvec-manifest` crate and wheel now ship license text.** Both declared
+  `MIT OR Apache-2.0` but packaged no `LICENSE-*` files (a pre-0.5.0 defect);
+  added `LICENSE-MIT` + `LICENSE-APACHE-2.0` (copied from the workspace root) to
+  `ordvec-manifest/` and `ordvec-manifest-python/`, and made the release-publish
+  invariant gate require them for the manifest crate.
+
 ## 0.5.0 - 2026-06-13
 
 ### Added

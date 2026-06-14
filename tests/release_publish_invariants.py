@@ -712,6 +712,8 @@ def check_package_contents() -> None:
             "Cargo.lock",
             "Cargo.toml",
             "Cargo.toml.orig",
+            "LICENSE-APACHE-2.0",
+            "LICENSE-MIT",
             "README.md",
             "src/lib.rs",
             "src/main.rs",
