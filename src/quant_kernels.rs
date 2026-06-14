@@ -556,8 +556,8 @@ pub(crate) unsafe fn scan_b4_asym_avx512(
 ///
 /// Builds the shared `dim * 256` per-coordinate LUT once
 /// ([`build_b8_asym_lut`]), then dispatches to the AVX-512 gather kernel
-/// ([`scan_b8_asym_avx512_gather`]) when `avx512f` is detected at runtime
-/// and `dim % 16 == 0`, falling back to the portable scalar reference
+/// ([`scan_b8_asym_avx512_gather`]) when `avx512f` + `avx512bw` are detected at
+/// runtime and `dim % 16 == 0`, falling back to the portable scalar reference
 /// ([`scan_b8_to_topk`]) on every other target / CPU / dim. Centralising
 /// the dispatch here keeps the `unsafe` SIMD reach in one place and out of
 /// `quant.rs`.

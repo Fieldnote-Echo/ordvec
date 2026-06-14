@@ -588,8 +588,8 @@ impl RankQuant {
     /// the score is a per-coordinate gather `Σ_d lut[d*256 + code[d]]`
     /// against the `dim * 256` LUT: it dispatches to the AVX-512
     /// `vgatherdps` kernel (`scan_b8_asym` → `scan_b8_asym_avx512_gather`)
-    /// when `avx512f` is present and `dim % 16 == 0`, else the portable
-    /// scalar LUT reference (`scan_b8_to_topk`). Unlike [`Self::search`],
+    /// when `avx512f` + `avx512bw` are present and `dim % 16 == 0`, else the
+    /// portable scalar LUT reference (`scan_b8_to_topk`). Unlike [`Self::search`],
     /// this never panics on an asymmetric-only instance.
     pub fn search_asymmetric(&self, queries: &[f32], k: usize) -> SearchResults {
         let nq = queries.len() / self.dim;
