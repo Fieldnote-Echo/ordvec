@@ -989,6 +989,34 @@ mod tests {
         doc.iter().zip(q).map(|(d, qq)| (d & qq).count_ones()).sum()
     }
 
+    /// Returns `true` if the host supports AVX-512 VPOPCNTDQ and the test should
+    /// proceed. When AVX-512 is absent:
+    ///
+    /// - If `ORDVEC_REQUIRE_AVX512` is set to `"1"` or `"true"` (used by the
+    ///   Intel SDE CI job), this panics so the job fails loudly instead of
+    ///   silently treating a skipped test as green coverage.
+    /// - Otherwise it emits a skip notice to stderr and returns `false`; the
+    ///   caller should return immediately.
+    fn require_avx512_or_skip(test_name: &str) -> bool {
+        if crate::avx512vpop_supported() {
+            return true;
+        }
+        let required = std::env::var("ORDVEC_REQUIRE_AVX512")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+        if required {
+            panic!(
+                "SKIP {test_name}: host lacks AVX-512 VPOPCNTDQ but \
+                 ORDVEC_REQUIRE_AVX512 is set — AVX-512 kernels are not enforced"
+            );
+        }
+        eprintln!(
+            "SKIP {test_name}: host lacks AVX-512 VPOPCNTDQ; \
+             set ORDVEC_REQUIRE_AVX512=1 to enforce"
+        );
+        false
+    }
+
     // Dims covering every qwords-per-vec tail residue (qpv % 8 ∈ 0..=7), the
     // lanes==0 all-tail cases (qpv < 8: 64/384/448), and the common embedding
     // dims 384/512/768/1024/1536. qpv = dim / 64.
@@ -998,6 +1026,9 @@ mod tests {
 
     #[test]
     fn avx512_path_matches_scalar_across_residues_and_common_dims() {
+        if !require_avx512_or_skip("avx512_path_matches_scalar_across_residues_and_common_dims") {
+            return;
+        }
         for &dim in &PARITY_DIMS {
             let n = 300usize;
             let n_top = (dim / 4).max(1);
@@ -1103,11 +1134,7 @@ mod tests {
         // on the scalar path), so a green run on such a host is not mistaken for
         // tail-kernel coverage. (Replaces a tautological predicate self-equality
         // check; the cross-platform scalar parity lives in the test above.)
-        if !crate::avx512vpop_supported() {
-            eprintln!(
-                "masked_tail test skipped: AVX-512 VPOPCNTDQ not present on this host \
-                 (the tail kernel is exercised by the Intel SDE CI job)"
-            );
+        if !require_avx512_or_skip("masked_tail_kernel_matches_scalar_when_avx512_present") {
             return;
         }
         // qpv % 8 != 0 (384->6, 768->12, 832->13) -> the masked tail runs.

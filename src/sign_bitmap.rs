@@ -740,6 +740,34 @@ mod tests {
             .sum()
     }
 
+    /// Returns `true` if the host supports AVX-512 VPOPCNTDQ and the test should
+    /// proceed. When AVX-512 is absent:
+    ///
+    /// - If `ORDVEC_REQUIRE_AVX512` is set to `"1"` or `"true"` (used by the
+    ///   Intel SDE CI job), this panics so the job fails loudly instead of
+    ///   silently treating a skipped test as green coverage.
+    /// - Otherwise it emits a skip notice to stderr and returns `false`; the
+    ///   caller should return immediately.
+    fn require_avx512_or_skip(test_name: &str) -> bool {
+        if crate::avx512vpop_supported() {
+            return true;
+        }
+        let required = std::env::var("ORDVEC_REQUIRE_AVX512")
+            .map(|v| v == "1" || v == "true")
+            .unwrap_or(false);
+        if required {
+            panic!(
+                "SKIP {test_name}: host lacks AVX-512 VPOPCNTDQ but \
+                 ORDVEC_REQUIRE_AVX512 is set — AVX-512 kernels are not enforced"
+            );
+        }
+        eprintln!(
+            "SKIP {test_name}: host lacks AVX-512 VPOPCNTDQ; \
+             set ORDVEC_REQUIRE_AVX512=1 to enforce"
+        );
+        false
+    }
+
     #[test]
     fn candidate_batch_helpers() {
         use super::CandidateBatch;
@@ -1018,6 +1046,9 @@ mod tests {
 
     #[test]
     fn avx512_path_matches_scalar_at_production_dim() {
+        if !require_avx512_or_skip("avx512_path_matches_scalar_at_production_dim") {
+            return;
+        }
         const PROD_D: usize = 1024;
         let n = 256;
         let mut rng = ChaCha8Rng::seed_from_u64(31);
@@ -1052,6 +1083,9 @@ mod tests {
 
     #[test]
     fn avx512_path_matches_scalar_across_residues_and_common_dims() {
+        if !require_avx512_or_skip("avx512_path_matches_scalar_across_residues_and_common_dims") {
+            return;
+        }
         // Covers every qpv tail residue (qpv % 8 ∈ 0..=7), the lanes==0 all-tail
         // cases (qpv < 8: 64/384/448), and the common embedding dims
         // 384/512/768/1024/1536. The AVX-512 path (masked tail for non-multiples
