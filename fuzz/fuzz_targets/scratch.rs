@@ -69,9 +69,14 @@ thread_local! {
 /// `run` — such failures are environmental, not loader bugs, so they must not be
 /// reported as crashes.
 ///
-/// The thread-local borrow is released **before** `run` is invoked, so the
-/// helper is reentrancy-safe: a `run` that (directly or indirectly) re-enters
-/// `with_scratch_file` will not trip a `RefCell` double-borrow panic.
+/// The thread-local `RefCell` borrow is released **before** `run` is invoked, so
+/// a `run` that (directly or indirectly) re-enters `with_scratch_file` will not
+/// trip a `RefCell` double-borrow panic — the helper is *borrow-safe*. It is
+/// **not** safe for genuinely nested use, however: there is one scratch file per
+/// worker thread, so a nested call would rewrite the same file the outer call is
+/// still pointing `run` at, clobbering its bytes. The loader fuzz targets never
+/// nest (one synchronous call per iteration), so this is a forward-looking
+/// caveat, not a current bug.
 pub fn with_scratch_file<F>(data: &[u8], run: F)
 where
     F: FnOnce(&Path),
