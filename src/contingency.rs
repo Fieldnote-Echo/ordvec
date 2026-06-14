@@ -1,6 +1,16 @@
 //! Stateless dense bucket-overlap contingency table for two fixed-length
 //! ordinal bucket-code vectors.
 //!
+//! **Feature gate:** this module is only compiled with the non-default
+//! `experimental` cargo feature (`--features experimental`).
+//!
+//! **Stability:** [`Contingency`] and [`Projection`] are the *stable* side of
+//! the `experimental` gate — they are the intended long-term surface for
+//! contingency-table analysis and are covered by semver guarantees from the
+//! release that introduced them. [`crate::MultiBucketBitmap`] is the
+//! *unstable* counterpart behind the same gate and may change without a
+//! major-version bump. See the crate-root docs for the full distinction.
+//!
 //! A [`Contingency`] is the full `nb × nb` co-occurrence table between two
 //! bucket-code slices `q` and `d` of equal length `dim`:
 //!
