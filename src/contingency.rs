@@ -1,6 +1,16 @@
 //! Stateless dense bucket-overlap contingency table for two fixed-length
 //! ordinal bucket-code vectors.
 //!
+//! **Feature gate:** this module is only compiled with the non-default
+//! `experimental` cargo feature (`--features experimental`).
+//!
+//! **Stability:** [`Contingency`] and [`Projection`] are the *stable* side of
+//! the `experimental` gate — they are the intended long-term surface for
+//! contingency-table analysis and are covered by semver guarantees from the
+//! release that introduced them. [`crate::MultiBucketBitmap`] is the
+//! *unstable* counterpart behind the same gate and may change without a
+//! major-version bump. See the crate-root docs for the full distinction.
+//!
 //! A [`Contingency`] is the full `nb × nb` co-occurrence table between two
 //! bucket-code slices `q` and `d` of equal length `dim`:
 //!
@@ -17,9 +27,18 @@
 //! L1 distance, coarsened tables, the symmetric RankQuant score, and general
 //! learned `nb × nb` weight matrices) over a single `O(dim)` histogram pass.
 //!
-//! Ported to reach behavioural parity with `ordgraph::edge::Contingency`. The
-//! `EdgeEvidence` "this is evidence for X" wrapper deliberately stays in
-//! ordgraph — ordvec exposes only the substrate primitive.
+//! ## Adopting this API
+//!
+//! `Contingency` is a reusable, index-free bucket-code surface. If you maintain
+//! a local fork of this logic, replace it with:
+//!
+//! ```rust,ignore
+//! use ordvec::{Contingency, Projection};
+//! ```
+//!
+//! Rank math (bucket assignment from float scores) delegates to
+//! [`crate::RankQuant`]. `Contingency` itself operates on the *already bucketed*
+//! `&[u8]` codes and carries no corpus state.
 //!
 //! ## Count width
 //!
@@ -66,6 +85,16 @@ impl Contingency {
             return Err(OrdvecError::InvalidParameter {
                 name: "nb",
                 message: "bucket count must be > 0".to_string(),
+            });
+        }
+        // Codes are `u8`, so a bucket id is in `0..=255` and `nb > 256` is both
+        // meaningless and dangerous: `nb` is a caller-supplied `usize`, so a
+        // large value would allocate an `nb * nb` table (e.g. `nb = 1 << 20` ⇒
+        // a terabyte) and abort the process. Cap it at the u8 domain.
+        if nb > u8::MAX as usize + 1 {
+            return Err(OrdvecError::InvalidParameter {
+                name: "nb",
+                message: format!("must be <= 256 (codes are u8); got {nb}"),
             });
         }
         if query.len() != doc.len() {
@@ -167,10 +196,14 @@ impl Contingency {
         let mut total = 0u32;
         for qb in 0..self.buckets {
             let base = qb * self.buckets;
-            for db in 0..self.buckets {
-                if qb.abs_diff(db) <= radius {
-                    total += self.counts[base + db];
-                }
+            // Iterate only the in-band columns instead of scanning every
+            // column with an `abs_diff` filter.
+            let start = qb.saturating_sub(radius);
+            // `saturating_add`: `radius` is an uncapped public parameter, so a
+            // near-`usize::MAX` value must not overflow before the `.min()`.
+            let end = qb.saturating_add(radius).min(self.buckets - 1);
+            for db in start..=end {
+                total += self.counts[base + db];
             }
         }
         total
@@ -250,10 +283,14 @@ impl Contingency {
         for qb in 0..self.buckets {
             let base = qb * self.buckets;
             let qw = qb as f32 - centre;
+            // `qw` is invariant over the inner loop: accumulate the row's
+            // centred mass first, then scale by `qw` once (nb multiplies
+            // instead of nb²).
+            let mut row_sum = 0.0f32;
             for db in 0..self.buckets {
-                let weight = qw * (db as f32 - centre);
-                score += weight * self.counts[base + db] as f32;
+                row_sum += (db as f32 - centre) * self.counts[base + db] as f32;
             }
+            score += qw * row_sum;
         }
         score
     }
@@ -279,9 +316,10 @@ impl Contingency {
     }
 }
 
-/// Named projections over a [`Contingency`], mirroring
-/// `ordgraph::edge::Projection`. Each variant's [`Self::score`] returns the
-/// projection as `f32`.
+/// Named projections over a [`Contingency`].
+///
+/// Each variant selects a scalar summary of the co-occurrence table.
+/// [`Self::score`] evaluates the chosen projection and returns it as `f32`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Projection {
     /// Top-bucket cell count — [`Contingency::top_overlap`].
@@ -300,7 +338,8 @@ pub enum Projection {
 
 impl Projection {
     /// Evaluate this projection against `contingency`, returning the value as
-    /// `f32` (matching the ordgraph projection contract).
+    /// `f32`. The returned value is the scalar summary selected by the variant —
+    /// integer-valued projections are widened to `f32` without rounding.
     pub fn score(self, contingency: &Contingency) -> f32 {
         match self {
             Self::TopOverlap => contingency.top_overlap() as f32,
@@ -420,6 +459,14 @@ unsafe fn build_histogram_avx512(query: &[u8], doc: &[u8], nb: usize, counts: &m
         // u64). A doc cell holds at most `len` codes; u64 cannot overflow.
         let mut acc = vec![0u64; nb * nb];
 
+        // Bucket-value broadcast vectors, invariant across the 64-byte blocks —
+        // precompute once instead of recomputing `set1_epi8` per block per
+        // bucket. `nb <= 16` (dispatch gate), so a fixed array of 16 covers it.
+        let mut splats = [_mm512_setzero_si512(); 16];
+        for (i, s) in splats.iter_mut().enumerate().take(nb) {
+            *s = _mm512_set1_epi8(i as i8);
+        }
+
         let mut off = 0usize;
         while off < len {
             let rem = len - off;
@@ -450,15 +497,13 @@ unsafe fn build_histogram_avx512(query: &[u8], doc: &[u8], nb: usize, counts: &m
             // popcount of the AND of the two lane masks, restricted to live
             // lanes. This is popcount(maskQ & maskD) — the masked popcount-AND.
             for a in 0..nb {
-                let a_splat = _mm512_set1_epi8(a as i8);
-                let q_eq: __mmask64 = _mm512_cmpeq_epi8_mask(q_vec, a_splat) & live;
+                let q_eq: __mmask64 = _mm512_cmpeq_epi8_mask(q_vec, splats[a]) & live;
                 if q_eq == 0 {
                     continue;
                 }
                 let row = a * nb;
                 for b in 0..nb {
-                    let b_splat = _mm512_set1_epi8(b as i8);
-                    let d_eq: __mmask64 = _mm512_cmpeq_epi8_mask(d_vec, b_splat);
+                    let d_eq: __mmask64 = _mm512_cmpeq_epi8_mask(d_vec, splats[b]);
                     acc[row + b] += (q_eq & d_eq).count_ones() as u64;
                 }
             }
@@ -478,13 +523,12 @@ unsafe fn build_histogram_avx512(query: &[u8], doc: &[u8], nb: usize, counts: &m
 mod tests {
     use super::*;
 
-    // ---- ordgraph::edge parity gate -------------------------------------
-    // Every assertion value below is reproduced verbatim from
-    // ordgraph-proto/src/edge.rs's tests. The bucket codes are the *already
-    // bucketed* outputs ordgraph derives from ranks; here we feed the codes
-    // directly (the stateless dense-code contract).
+    // ---- behavioural contract: bucket-code contingency ------------------
+    // These tests verify the algebraic properties of the contingency table
+    // using directly-supplied bucket codes (the stateless dense-code contract).
+    // All assertion values are exact expected outcomes of the described inputs.
 
-    /// The ordgraph `contingency_counts_bucket_intersections` case:
+    /// Contingency counts bucket intersections:
     /// query = [0,0,1,1,2,2,3,3], doc = [3,3,2,2,1,1,0,0] (reverse), nb = 4.
     #[test]
     fn parity_counts_bucket_intersections() {
@@ -498,8 +542,8 @@ mod tests {
         assert_eq!(c.diagonal_agreement(), 0);
     }
 
-    /// The ordgraph `projections_recover_top_diagonal_band_and_rankquant_score`
-    /// case: query = [0,0,1,1,2,2,3,3], doc = [0,1,1,2,2,3,3,0], nb = 4.
+    /// Projections recover top, diagonal, band, and RankQuant scores:
+    /// query = [0,0,1,1,2,2,3,3], doc = [0,1,1,2,2,3,3,0], nb = 4.
     #[test]
     fn parity_projections() {
         let query = [0u8, 0, 1, 1, 2, 2, 3, 3];
@@ -520,6 +564,16 @@ mod tests {
         assert_eq!(c.top_group_overlap(2), 3);
         assert_eq!(c.bucket_l1_distance(), 6);
         assert_eq!(c.rankquant_symmetric_score(), 4.0);
+    }
+
+    #[test]
+    fn band_agreement_saturates_on_huge_radius() {
+        // `radius` is uncapped public input; a near-`usize::MAX` value must not
+        // overflow `qb + radius`. It should clamp to the whole table.
+        let query = [0u8, 0, 1, 1, 2, 2, 3, 3];
+        let doc = [0u8, 1, 1, 2, 2, 3, 3, 0];
+        let c = Contingency::new(&query, &doc, 4).unwrap();
+        assert_eq!(c.band_agreement(usize::MAX), c.total_count());
     }
 
     /// `bucket_l1_distance` must not overflow for constructor-accepted inputs.
@@ -544,7 +598,8 @@ mod tests {
         assert_eq!(c.bucket_l1_distance(), expected);
     }
 
-    /// The ordgraph `contingency_has_fixed_row_and_column_margins` case.
+    /// Fixed row and column margins: each query bucket and each doc bucket
+    /// appears exactly twice, so every row-sum and column-sum equals 2.
     #[test]
     fn parity_fixed_margins() {
         let query = [0u8, 0, 1, 1, 2, 2, 3, 3];
@@ -558,8 +613,8 @@ mod tests {
         }
     }
 
-    /// The ordgraph `rankquant_symmetric_projection_matches_direct_centered_sum`
-    /// case: the table-projected score equals the per-coordinate centred sum.
+    /// RankQuant symmetric projection matches the direct per-coordinate centred
+    /// sum: the table-projected score and the element-wise centred product agree.
     #[test]
     fn parity_rankquant_matches_direct_centered_sum() {
         let query = [0u8, 0, 1, 1, 2, 2, 3, 3];
@@ -576,7 +631,7 @@ mod tests {
         assert_eq!(c.rankquant_symmetric_score(), direct);
     }
 
-    /// The ordgraph `coarsened_counts_preserve_total_mass` case:
+    /// Coarsened counts preserve total mass:
     /// coarsened_counts(2) = [3, 1, 1, 3], total = 8.
     #[test]
     fn parity_coarsened_counts() {
@@ -641,6 +696,19 @@ mod tests {
     }
 
     #[test]
+    fn rejects_more_than_256_buckets() {
+        // `nb` is a caller-supplied usize; codes are u8, so nb > 256 is rejected
+        // before the nb*nb allocation (a large nb would otherwise abort the host).
+        let err = Contingency::new(&[0u8], &[0u8], 300).unwrap_err();
+        assert!(matches!(
+            err,
+            OrdvecError::InvalidParameter { name: "nb", .. }
+        ));
+        // 256 is the boundary and is accepted.
+        assert!(Contingency::new(&[0u8], &[0u8], 256).is_ok());
+    }
+
+    #[test]
     fn rejects_out_of_range_code() {
         // doc has a code (4) >= nb (4).
         let err = Contingency::new(&[0u8, 1, 2, 3], &[0u8, 1, 2, 4], 4).unwrap_err();
@@ -692,10 +760,12 @@ mod tests {
     /// exercises the `find_out_of_range` skip branch (all u8 codes in range).
     #[test]
     fn large_nb_uses_scalar_and_skips_range_scan() {
+        // nb = 256 is the max (codes are u8) and still `> 255`, so the
+        // out-of-range scan is skipped and the scalar path is taken (nb > 16).
         let query = [0u8, 5, 200, 255];
         let doc = [255u8, 200, 5, 0];
-        let c = Contingency::new(&query, &doc, 300).unwrap();
-        assert_eq!(c.buckets(), 300);
+        let c = Contingency::new(&query, &doc, 256).unwrap();
+        assert_eq!(c.buckets(), 256);
         assert_eq!(c.count(0, 255), 1);
         assert_eq!(c.count(255, 0), 1);
         assert_eq!(c.count(200, 5), 1);
