@@ -447,3 +447,29 @@ fn b8_symmetric_matches_naive_reference_aligned_dim() {
         );
     }
 }
+
+#[test]
+fn rankquant_eval_search_supports_b8_at_any_dim() {
+    // The eval/empirical path (check_eval_bits widened to 1..=8) accepts b=8 even
+    // at a non-256-aligned dim, where the analytical symmetric norm is
+    // unavailable — it computes the norm empirically. Returns ranked results
+    // without panicking.
+    let dim = 384usize; // not a multiple of 256
+    let n = 32usize;
+    let nq = 2usize;
+    let corpus: Vec<f32> = (0..n * dim)
+        .map(|i| ((i * 7 % 101) as f32) - 50.0)
+        .collect();
+    let queries: Vec<f32> = (0..nq * dim)
+        .map(|i| ((i * 13 % 97) as f32) - 48.0)
+        .collect();
+    let res = ordvec::rankquant_eval_search(&corpus, &queries, dim, 8, 5);
+    assert_eq!(res.k, 5);
+    assert_eq!(res.nq, nq);
+    for &id in &res.indices {
+        assert!(
+            id >= 0 && (id as usize) < n,
+            "eval-search id out of range: {id}"
+        );
+    }
+}

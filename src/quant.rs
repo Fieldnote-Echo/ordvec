@@ -42,7 +42,10 @@ use crate::util::{assert_all_finite, l2_normalise, result_buffer_len, TopK};
 use crate::{validate_candidate_ids, OrdvecError, SearchResults};
 
 fn check_eval_bits(bits: u8) {
-    assert!((1..=7).contains(&bits), "bits must be in 1..=7");
+    // b=8 codes still fit a u8 (0..=255); the eval norm is computed empirically
+    // (not the analytical b=8 norm), so it is valid at any dim. b=9 is the first
+    // width whose codes overflow u8.
+    assert!((1..=8).contains(&bits), "bits must be in 1..=8");
 }
 
 fn rankquant_eval_norm(dim: usize, bits: u8) -> f32 {
