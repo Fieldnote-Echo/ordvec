@@ -16,7 +16,7 @@
 //! unstable-experimental. See [`RankQuantCapability`] and
 //! [`RankQuant::new_asymmetric`]. Its asymmetric path is a per-coordinate
 //! gather against the `dim * 256` LUT: an AVX-512 `vgatherdps` kernel when
-//! available (`avx512f` + `dim % 16 == 0`), else the portable scalar LUT.
+//! available (`avx512f` + `avx512bw` + `dim % 16 == 0`), else the portable scalar LUT.
 //!
 //! The byte-LUT path ([`search_asymmetric_byte_lut`]) is re-exported
 //! `#[doc(hidden)]` (reachable as `ordvec::search_asymmetric_byte_lut`)

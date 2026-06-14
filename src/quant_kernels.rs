@@ -771,7 +771,7 @@ mod b8_gather_tests {
             let (s_scalar, i_scalar) = drain(&top_scalar, k);
 
             let mut top_gather = TopK::new(k);
-            // SAFETY: avx512f confirmed above; dim % 16 == 0; packed has
+            // SAFETY: avx512f+avx512bw confirmed above; dim % 16 == 0; packed has
             // n*dim bytes and lut has dim*256 entries by construction.
             unsafe {
                 scan_b8_asym_avx512_gather(&packed, n, dim, &lut, scale, &mut top_gather);
@@ -819,7 +819,7 @@ mod b8_gather_tests {
         let lut = build_b8_asym_lut(&q_unit);
 
         let mut top = TopK::new(k);
-        // SAFETY: avx512f confirmed; dim % 16 == 0; shapes match.
+        // SAFETY: avx512f+avx512bw confirmed; dim % 16 == 0; shapes match.
         unsafe {
             scan_b8_asym_avx512_gather(&packed, n, dim, &lut, 1.0, &mut top);
         }
@@ -929,7 +929,7 @@ mod b8_gather_tests {
                 "b=8 AVX-512 gather",
                 Box::new(move || {
                     let mut top = TopK::new(k);
-                    // SAFETY: avx512f confirmed; dim % 16 == 0; shapes match.
+                    // SAFETY: avx512f+avx512bw confirmed; dim % 16 == 0; shapes match.
                     unsafe {
                         scan_b8_asym_avx512_gather(&packed8, n, dim, &lut8, scale, &mut top);
                     }
