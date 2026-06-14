@@ -43,7 +43,10 @@ use crate::{validate_candidate_ids, OrdvecError, SearchResults};
 
 fn check_eval_bits(bits: u8) {
     // b=8 codes still fit a u8 (0..=255); the eval norm is computed empirically
-    // (not the analytical b=8 norm), so it is valid at any dim. b=9 is the first
+    // (not the analytical b=8 norm), so it is valid at any dim. This is *why*
+    // the eval path is not bound by the `dim % 256 == 0` gate that the
+    // analytical-norm symmetric `RankQuant::search` carries for b=8 — the
+    // empirical norm is exact under any bucket occupancy. b=9 is the first
     // width whose codes overflow u8.
     assert!((1..=8).contains(&bits), "bits must be in 1..=8");
 }
@@ -1108,10 +1111,21 @@ fn validate_finite(values: &[f32], name: &'static str) -> Result<(), OrdvecError
 /// This does **not** use [`RankQuant`] storage and does not change the `.tvrq`
 /// packing contract. It rank-transforms `corpus` and `queries`, buckets each
 /// rank into `1 << bits` equal-width bins, mean-centres bucket ids, normalises
-/// by the analytical norm for that `(dim, bits)`, and returns top-`k` results.
+/// by the **empirical** norm for that `(dim, bits)` (the exact L2 norm of the
+/// realised bucket-centre vector, summed over `0..dim`), and returns top-`k`
+/// results.
+///
+/// Because the norm is computed empirically rather than from the closed form,
+/// this path is valid for **any** `dim` and **any** `bits ∈ 1..=8`, including
+/// `bits = 8` at a `dim` not divisible by `256`. It therefore does *not* carry
+/// the `dim % 256 == 0` restriction that applies to the analytical-norm
+/// symmetric [`RankQuant::search`] (see [`RankQuant::new_asymmetric`]): that
+/// restriction exists only because the closed-form `rankquant_norm` is exact
+/// solely under uniform bucket occupancy, which this empirical path sidesteps.
 ///
 /// Intended for research/eval sweeps where non-byte-aligned widths such as
-/// `bits = 3` need to be scored without inventing a persistent packed format.
+/// `bits = 3`, or `b = 8` at arbitrary dims, need to be scored without
+/// inventing a persistent packed format.
 pub fn rankquant_eval_search(
     corpus: &[f32],
     queries: &[f32],

@@ -470,6 +470,11 @@ fn rankquant_eval_search_supports_b8_at_any_dim() {
     // at a non-256-aligned dim, where the analytical symmetric norm is
     // unavailable — it computes the norm empirically. Returns ranked results
     // without panicking.
+    //
+    // This is a *distinct* surface from the analytical-norm `RankQuant::search`,
+    // whose b=8 symmetric scoring is gated to `dim % 256 == 0`. There is no
+    // contradiction: the eval path's empirical norm is exact under any bucket
+    // occupancy, which is precisely why it is unbound by the 256 gate.
     let dim = 384usize; // not a multiple of 256
     let n = 32usize;
     let nq = 2usize;
