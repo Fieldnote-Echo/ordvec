@@ -884,9 +884,11 @@ impl RankQuant {
     }
 
     /// Serial (NO rayon) batched subset rerank into caller-owned buffers.
-    /// Allocation-free after `scratch` warmup. The integration contract for
-    /// runtimes that own their own parallelism (call this from a bounded pool,
-    /// with the GIL released, one row range per worker is the caller's choice).
+    /// Allocation-free after `scratch` warmup **on the SIMD rerank path
+    /// (AVX-512 / AVX2)**; the scalar fallback allocates a per-query scoring LUT.
+    /// The integration contract for runtimes that own their own parallelism
+    /// (call this from a bounded pool, with the GIL released, one row range per
+    /// worker is the caller's choice).
     ///
     /// `queries` is `nq * dim`. Candidates are CSR: `candidate_offsets.len()
     /// == nq + 1`, row `qi` is `candidates[candidate_offsets[qi]..candidate_offsets[qi+1]]`.
