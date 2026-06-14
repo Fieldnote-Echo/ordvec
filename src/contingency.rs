@@ -27,9 +27,18 @@
 //! L1 distance, coarsened tables, the symmetric RankQuant score, and general
 //! learned `nb × nb` weight matrices) over a single `O(dim)` histogram pass.
 //!
-//! Ported to reach behavioural parity with `ordgraph::edge::Contingency`. The
-//! `EdgeEvidence` "this is evidence for X" wrapper deliberately stays in
-//! ordgraph — ordvec exposes only the substrate primitive.
+//! ## Adopting this API
+//!
+//! `Contingency` is a reusable, index-free bucket-code surface. If you maintain
+//! a local fork of this logic, replace it with:
+//!
+//! ```rust,ignore
+//! use ordvec::{Contingency, Projection};
+//! ```
+//!
+//! Rank math (bucket assignment from float scores) delegates to
+//! [`crate::RankQuant`]. `Contingency` itself operates on the *already bucketed*
+//! `&[u8]` codes and carries no corpus state.
 //!
 //! ## Count width
 //!
@@ -307,9 +316,10 @@ impl Contingency {
     }
 }
 
-/// Named projections over a [`Contingency`], mirroring
-/// `ordgraph::edge::Projection`. Each variant's [`Self::score`] returns the
-/// projection as `f32`.
+/// Named projections over a [`Contingency`].
+///
+/// Each variant selects a scalar summary of the co-occurrence table.
+/// [`Self::score`] evaluates the chosen projection and returns it as `f32`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Projection {
     /// Top-bucket cell count — [`Contingency::top_overlap`].
@@ -328,7 +338,8 @@ pub enum Projection {
 
 impl Projection {
     /// Evaluate this projection against `contingency`, returning the value as
-    /// `f32` (matching the ordgraph projection contract).
+    /// `f32`. The returned value is the scalar summary selected by the variant —
+    /// integer-valued projections are widened to `f32` without rounding.
     pub fn score(self, contingency: &Contingency) -> f32 {
         match self {
             Self::TopOverlap => contingency.top_overlap() as f32,
@@ -512,13 +523,12 @@ unsafe fn build_histogram_avx512(query: &[u8], doc: &[u8], nb: usize, counts: &m
 mod tests {
     use super::*;
 
-    // ---- ordgraph::edge parity gate -------------------------------------
-    // Every assertion value below is reproduced verbatim from
-    // ordgraph-proto/src/edge.rs's tests. The bucket codes are the *already
-    // bucketed* outputs ordgraph derives from ranks; here we feed the codes
-    // directly (the stateless dense-code contract).
+    // ---- behavioural contract: bucket-code contingency ------------------
+    // These tests verify the algebraic properties of the contingency table
+    // using directly-supplied bucket codes (the stateless dense-code contract).
+    // All assertion values are exact expected outcomes of the described inputs.
 
-    /// The ordgraph `contingency_counts_bucket_intersections` case:
+    /// Contingency counts bucket intersections:
     /// query = [0,0,1,1,2,2,3,3], doc = [3,3,2,2,1,1,0,0] (reverse), nb = 4.
     #[test]
     fn parity_counts_bucket_intersections() {
@@ -532,8 +542,8 @@ mod tests {
         assert_eq!(c.diagonal_agreement(), 0);
     }
 
-    /// The ordgraph `projections_recover_top_diagonal_band_and_rankquant_score`
-    /// case: query = [0,0,1,1,2,2,3,3], doc = [0,1,1,2,2,3,3,0], nb = 4.
+    /// Projections recover top, diagonal, band, and RankQuant scores:
+    /// query = [0,0,1,1,2,2,3,3], doc = [0,1,1,2,2,3,3,0], nb = 4.
     #[test]
     fn parity_projections() {
         let query = [0u8, 0, 1, 1, 2, 2, 3, 3];
@@ -588,7 +598,8 @@ mod tests {
         assert_eq!(c.bucket_l1_distance(), expected);
     }
 
-    /// The ordgraph `contingency_has_fixed_row_and_column_margins` case.
+    /// Fixed row and column margins: each query bucket and each doc bucket
+    /// appears exactly twice, so every row-sum and column-sum equals 2.
     #[test]
     fn parity_fixed_margins() {
         let query = [0u8, 0, 1, 1, 2, 2, 3, 3];
@@ -602,8 +613,8 @@ mod tests {
         }
     }
 
-    /// The ordgraph `rankquant_symmetric_projection_matches_direct_centered_sum`
-    /// case: the table-projected score equals the per-coordinate centred sum.
+    /// RankQuant symmetric projection matches the direct per-coordinate centred
+    /// sum: the table-projected score and the element-wise centred product agree.
     #[test]
     fn parity_rankquant_matches_direct_centered_sum() {
         let query = [0u8, 0, 1, 1, 2, 2, 3, 3];
@@ -620,7 +631,7 @@ mod tests {
         assert_eq!(c.rankquant_symmetric_score(), direct);
     }
 
-    /// The ordgraph `coarsened_counts_preserve_total_mass` case:
+    /// Coarsened counts preserve total mass:
     /// coarsened_counts(2) = [3, 1, 1, 3], total = 8.
     #[test]
     fn parity_coarsened_counts() {
