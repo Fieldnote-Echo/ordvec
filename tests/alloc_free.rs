@@ -47,35 +47,33 @@ static GLOBAL: Counting = Counting;
 
 #[test]
 fn batched_into_is_truly_allocation_free_after_warmup() {
-    // The zero-allocation guarantee holds on the SIMD rerank path (AVX-512 /
-    // AVX2). The scalar fallback allocates a per-query scoring LUT in
-    // `scan_via_lut_scalar`, so on a host without that SIMD (e.g. aarch64, or
-    // x86 without AVX2) the strict zero-alloc check does not apply — skip it.
-    // AVX2 presence is sufficient (AVX-512 CPUs also report AVX2); either routes
-    // the rerank to a SIMD kernel that does not allocate the per-query LUT.
-    #[cfg(target_arch = "x86_64")]
-    let simd = std::is_x86_feature_detected!("avx2");
-    #[cfg(not(target_arch = "x86_64"))]
-    let simd = false;
-    if !simd {
-        eprintln!(
-            "alloc_free: SIMD rerank path unavailable; scalar fallback allocates a \
-             per-query LUT — skipping strict zero-alloc check"
-        );
-        return;
-    }
-
-    let dim = 128usize; // multiple of 64 -> exercises the AVX-512 tier where present
+    let dim = 128usize;
     let n = 2_000usize;
     let nq = 8usize;
     let m = 64usize;
     let k = 10usize;
+    let bits = 2u8;
+
+    // The zero-allocation guarantee holds only when the rerank takes a SIMD
+    // kernel: the scalar LUT fallback (`scan_via_lut_scalar`) allocates a
+    // per-query LUT. Gate on the SAME dispatch decision the rerank reads — via
+    // `subset_rerank_uses_simd`, so the gate cannot drift from the actual
+    // dispatch — and skip the strict check on hosts that fall to scalar
+    // (aarch64, or x86 without AVX2+FMA / AVX-512).
+    if !ordvec::subset_rerank_uses_simd(dim, bits) {
+        eprintln!(
+            "alloc_free: rerank uses the scalar LUT fallback for \
+             (dim={dim}, bits={bits}) — it allocates a per-query LUT; \
+             skipping strict zero-alloc check"
+        );
+        return;
+    }
 
     let mut rng = ChaCha8Rng::seed_from_u64(2024);
     let corpus: Vec<f32> = (0..n * dim).map(|_| rng.random_range(-1.0..1.0)).collect();
     let mut sign = SignBitmap::new(dim);
     sign.add(&corpus);
-    let mut rq = RankQuant::new(dim, 2);
+    let mut rq = RankQuant::new(dim, bits);
     rq.add(&corpus);
     let queries: Vec<f32> = (0..nq * dim).map(|_| rng.random_range(-1.0..1.0)).collect();
 

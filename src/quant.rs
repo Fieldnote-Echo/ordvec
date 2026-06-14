@@ -228,6 +228,21 @@ fn select_simd_tier(dim: usize, bits: u8) -> SimdTier {
     }
 }
 
+/// Whether the asymmetric subset rerank takes a SIMD kernel (vs the scalar LUT
+/// fallback) for `(dim, bits)` on this CPU. The scalar fallback allocates a
+/// per-query LUT, so the allocation-free steady-state guarantee of
+/// [`RankQuant::search_asymmetric_subset_batched_serial_into`] holds exactly
+/// when this is `true`.
+///
+/// `#[doc(hidden)]` — a diagnostic for tests, not a stability surface. It reads
+/// the same [`select_simd_tier`] the rerank dispatch reads, so it cannot drift
+/// from the actual dispatch.
+#[doc(hidden)]
+#[must_use]
+pub fn subset_rerank_uses_simd(dim: usize, bits: u8) -> bool {
+    !matches!(select_simd_tier(dim, bits), SimdTier::None)
+}
+
 impl RankQuant {
     pub fn validate_params(dim: usize, bits: u8) -> Result<(), OrdvecError> {
         if !matches!(bits, 1 | 2 | 4) {

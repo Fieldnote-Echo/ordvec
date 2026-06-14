@@ -80,6 +80,13 @@ pub use sign_bitmap::SignBitmap;
 #[doc(hidden)]
 pub use quant::search_asymmetric_byte_lut;
 
+// `subset_rerank_uses_simd` reports whether the asymmetric subset rerank takes a
+// SIMD kernel (vs the allocating scalar LUT fallback) for a `(dim, bits)` on
+// this CPU. `#[doc(hidden)]` — reachable for the allocation-free test so its
+// skip-gate cannot drift from the actual rerank dispatch.
+#[doc(hidden)]
+pub use quant::subset_rerank_uses_simd;
+
 // `MultiBucketBitmap` underwrites the bilinear bucket-overlap
 // decomposition but is not the constant-weight top-bucket theorem surface and
 // is not stable public API. It is reachable only with the `experimental`

@@ -145,6 +145,9 @@ steady-state hot loop:
 
 ```rust
 use ordvec::{RankQuant, SignBitmap, SubsetScratch};
+// Shape sketch (not standalone): `rq: RankQuant` and `sign: SignBitmap` are
+// built and `add`-ed as in the Quickstart above; `queries` is your flat
+// `dim * nq` f32 batch, `m` the shortlist size, `k` the top-k.
 // Stage 1 — serial CSR candidate generation (never enters rayon):
 let cb = sign.top_m_candidates_batched_serial_csr(&queries, m); // CandidateBatch { offsets, candidates }
 // Stage 2 — rerank into CALLER-OWNED buffers with a reusable scratch:
