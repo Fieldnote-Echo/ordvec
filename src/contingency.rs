@@ -68,6 +68,16 @@ impl Contingency {
                 message: "bucket count must be > 0".to_string(),
             });
         }
+        // Codes are `u8`, so a bucket id is in `0..=255` and `nb > 256` is both
+        // meaningless and dangerous: `nb` is a caller-supplied `usize`, so a
+        // large value would allocate an `nb * nb` table (e.g. `nb = 1 << 20` ⇒
+        // a terabyte) and abort the process. Cap it at the u8 domain.
+        if nb > u8::MAX as usize + 1 {
+            return Err(OrdvecError::InvalidParameter {
+                name: "nb",
+                message: format!("must be <= 256 (codes are u8); got {nb}"),
+            });
+        }
         if query.len() != doc.len() {
             return Err(OrdvecError::InvalidVectorLength {
                 name: "doc",
@@ -662,6 +672,19 @@ mod tests {
             err,
             OrdvecError::InvalidParameter { name: "nb", .. }
         ));
+    }
+
+    #[test]
+    fn rejects_more_than_256_buckets() {
+        // `nb` is a caller-supplied usize; codes are u8, so nb > 256 is rejected
+        // before the nb*nb allocation (a large nb would otherwise abort the host).
+        let err = Contingency::new(&[0u8], &[0u8], 300).unwrap_err();
+        assert!(matches!(
+            err,
+            OrdvecError::InvalidParameter { name: "nb", .. }
+        ));
+        // 256 is the boundary and is accepted.
+        assert!(Contingency::new(&[0u8], &[0u8], 256).is_ok());
     }
 
     #[test]
