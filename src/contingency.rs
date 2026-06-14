@@ -167,10 +167,12 @@ impl Contingency {
         let mut total = 0u32;
         for qb in 0..self.buckets {
             let base = qb * self.buckets;
-            for db in 0..self.buckets {
-                if qb.abs_diff(db) <= radius {
-                    total += self.counts[base + db];
-                }
+            // Iterate only the in-band columns instead of scanning every
+            // column with an `abs_diff` filter.
+            let start = qb.saturating_sub(radius);
+            let end = (qb + radius).min(self.buckets - 1);
+            for db in start..=end {
+                total += self.counts[base + db];
             }
         }
         total
@@ -250,10 +252,14 @@ impl Contingency {
         for qb in 0..self.buckets {
             let base = qb * self.buckets;
             let qw = qb as f32 - centre;
+            // `qw` is invariant over the inner loop: accumulate the row's
+            // centred mass first, then scale by `qw` once (nb multiplies
+            // instead of nb²).
+            let mut row_sum = 0.0f32;
             for db in 0..self.buckets {
-                let weight = qw * (db as f32 - centre);
-                score += weight * self.counts[base + db] as f32;
+                row_sum += (db as f32 - centre) * self.counts[base + db] as f32;
             }
+            score += qw * row_sum;
         }
         score
     }
@@ -420,6 +426,14 @@ unsafe fn build_histogram_avx512(query: &[u8], doc: &[u8], nb: usize, counts: &m
         // u64). A doc cell holds at most `len` codes; u64 cannot overflow.
         let mut acc = vec![0u64; nb * nb];
 
+        // Bucket-value broadcast vectors, invariant across the 64-byte blocks —
+        // precompute once instead of recomputing `set1_epi8` per block per
+        // bucket. `nb <= 16` (dispatch gate), so a fixed array of 16 covers it.
+        let mut splats = [_mm512_setzero_si512(); 16];
+        for (i, s) in splats.iter_mut().enumerate().take(nb) {
+            *s = _mm512_set1_epi8(i as i8);
+        }
+
         let mut off = 0usize;
         while off < len {
             let rem = len - off;
@@ -450,15 +464,13 @@ unsafe fn build_histogram_avx512(query: &[u8], doc: &[u8], nb: usize, counts: &m
             // popcount of the AND of the two lane masks, restricted to live
             // lanes. This is popcount(maskQ & maskD) — the masked popcount-AND.
             for a in 0..nb {
-                let a_splat = _mm512_set1_epi8(a as i8);
-                let q_eq: __mmask64 = _mm512_cmpeq_epi8_mask(q_vec, a_splat) & live;
+                let q_eq: __mmask64 = _mm512_cmpeq_epi8_mask(q_vec, splats[a]) & live;
                 if q_eq == 0 {
                     continue;
                 }
                 let row = a * nb;
                 for b in 0..nb {
-                    let b_splat = _mm512_set1_epi8(b as i8);
-                    let d_eq: __mmask64 = _mm512_cmpeq_epi8_mask(d_vec, b_splat);
+                    let d_eq: __mmask64 = _mm512_cmpeq_epi8_mask(d_vec, splats[b]);
                     acc[row + b] += (q_eq & d_eq).count_ones() as u64;
                 }
             }
