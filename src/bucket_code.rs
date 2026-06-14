@@ -27,9 +27,27 @@
 //! the stateless dense-code contingency surface (`Contingency::new`, issue
 //! #219) without any further transform.
 //!
-//! Ported to reach behavioural parity with the `ordgraph` bucket-code
-//! prototype; the rank math is *not* re-implemented here — it delegates to the
-//! crate's shared [`crate::rank`] primitives.
+//! ## Migration from `ordgraph-proto`
+//!
+//! This surface replaces the local `CompositionSpec` / `RankQuantSpec` /
+//! `BucketCode` / `CompositionViolation` fork in `ordgraph-proto/src/code.rs`.
+//! Type names, constructors, accessors, and error values mirror that prototype
+//! (its tests' literal expectations are reproduced here as parity checks), so
+//! the downstream migration is a drop-in:
+//!
+//! 1. depend on `ordvec` (with the `experimental` feature while this surface is
+//!    gated) and `use ordvec::{BucketCode, CompositionSpec, RankQuantSpec,
+//!    CompositionViolation};`
+//! 2. delete `ordgraph-proto/src/code.rs` and its `mod code;`, re-pointing
+//!    callers at the `ordvec` types;
+//! 3. the rank math is *not* re-implemented here — [`BucketCode::from_vector`]
+//!    delegates to the crate's shared [`crate::rank`] primitives, so ordgraph
+//!    no longer forks rank/bucket semantics.
+//!
+//! Two intentional differences from the prototype (rationale in the PR):
+//! `bits = 8` is rejected here (it lands as a capability-gated width in the
+//! separate b=8 work, #221), and [`CompositionSpec::new`] rejects
+//! `buckets > 256` (codes are `u8`).
 
 use std::error::Error;
 use std::fmt;
