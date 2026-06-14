@@ -29,7 +29,23 @@ fn ref_b8_asymmetric(q: &[f32], doc: &[f32]) -> f32 {
     let q_unit: Vec<f32> = q.iter().map(|x| x / q_norm).collect();
     let r = rank_transform(doc);
     let codes = bucket_ranks(&r, 8);
-    let norm = rankquant_norm(d, 8);
+    // Exact L2 norm of this doc's centred bucket vector. For b=8 the bucket
+    // occupancy is uniform only when `dim % 256 == 0`; at other dims (e.g. 384)
+    // the closed-form `rankquant_norm` mis-scales the absolute score, so the
+    // reference — like production's `asymmetric_norm` — sums the realised
+    // squared centres (f64-accumulated, matching `rankquant_eval_norm`). The
+    // ranks are a permutation of `0..d` for every doc, so this equals the
+    // closed form exactly at 256-aligned dims.
+    let norm = {
+        let acc: f64 = codes
+            .iter()
+            .map(|&c| {
+                let cc = bucket_centre(c, 8) as f64;
+                cc * cc
+            })
+            .sum();
+        acc.sqrt() as f32
+    };
     let mut acc = 0.0f32;
     for i in 0..d {
         acc += q_unit[i] * bucket_centre(codes[i], 8);

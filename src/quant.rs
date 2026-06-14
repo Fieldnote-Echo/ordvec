@@ -61,6 +61,25 @@ fn rankquant_eval_norm(dim: usize, bits: u8) -> f32 {
     acc.sqrt() as f32
 }
 
+/// L2 norm of a document's bucket-centre vector, for asymmetric scoring.
+///
+/// For `bits ∈ {1, 2, 4}` (and `b = 8` when `dim % 256 == 0`) the bucket
+/// occupancy is exactly uniform, so the closed-form [`rankquant_norm`]
+/// (`sqrt(dim * var)`) is exact and cheaper. For `b = 8` at a `dim` not
+/// divisible by 256 the buckets are *not* equally occupied, so the closed
+/// form mis-scales the absolute scores (the *ranking* is unaffected — the
+/// norm is one global constant shared by every document — but
+/// `search_asymmetric` reports cosine-like scores, which must be correctly
+/// scaled). In that regime we fall back to the exact empirical norm, which
+/// sums the squared bucket centres over the realised rank→bucket map.
+fn asymmetric_norm(dim: usize, bits: u8) -> f32 {
+    if bits == 8 && !dim.is_multiple_of(256) {
+        rankquant_eval_norm(dim, bits)
+    } else {
+        rankquant_norm(dim, bits)
+    }
+}
+
 fn rankquant_eval_centres(v: &[f32], bits: u8, out: &mut [f32]) {
     debug_assert_eq!(v.len(), out.len());
     let ranks = rank_transform(v);
@@ -612,7 +631,7 @@ impl RankQuant {
         let dim = self.dim;
         let bits = self.bits;
         let n = self.n_vectors;
-        let norm = rankquant_norm(dim, bits);
+        let norm = asymmetric_norm(dim, bits);
         let inv_norm = 1.0_f32 / norm;
         let n_buckets = 1usize << bits;
         let bytes_per_vec = rankquant_bytes_per_vec(dim, bits);
@@ -915,7 +934,7 @@ impl RankQuant {
             return (Vec::new(), Vec::new());
         }
 
-        let norm = rankquant_norm(dim, bits);
+        let norm = asymmetric_norm(dim, bits);
         let inv_norm = 1.0_f32 / norm;
         #[cfg(target_arch = "x86_64")]
         let centre = ((1u32 << bits) as f32 - 1.0) / 2.0;
