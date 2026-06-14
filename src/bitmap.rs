@@ -1094,18 +1094,42 @@ mod tests {
     }
 
     #[test]
-    fn scan_dispatch_is_dimension_independent() {
-        // The qpv % 8 gate is gone: the SignBitmap/Bitmap scan dispatch reads
-        // only `avx512vpop_supported()`, which takes no dimension. So on a
-        // VPOPCNTDQ host, 384 (qpv=6) and 768 (qpv=12) — previously routed to
-        // the scalar fallback — take the SAME kernel as 1024/1536. Bit-identity
-        // at those dims is proven by the parity test above; the ~4x speedup is
-        // shown by `examples/bge_kernel_bench`. No dimension can be special-cased
-        // back to scalar because the predicate is dim-free.
-        assert_eq!(
-            crate::avx512vpop_supported(),
-            crate::avx512vpop_supported(),
-            "dispatch predicate must be pure"
-        );
+    fn masked_tail_kernel_matches_scalar_when_avx512_present() {
+        // Directly exercise the masked-tail AVX-512 kernel. This is ONLY
+        // meaningful on a host (or Intel SDE) with AVX-512 VPOPCNTDQ: there the
+        // qpv % 8 != 0 dims below force the masked tail and the dispatch routes
+        // to the AVX-512 path, so this asserts the tail kernel itself. On a
+        // non-AVX-512 host it SKIPS with a notice (rather than silently passing
+        // on the scalar path), so a green run on such a host is not mistaken for
+        // tail-kernel coverage. (Replaces a tautological predicate self-equality
+        // check; the cross-platform scalar parity lives in the test above.)
+        if !crate::avx512vpop_supported() {
+            eprintln!(
+                "masked_tail test skipped: AVX-512 VPOPCNTDQ not present on this host \
+                 (the tail kernel is exercised by the Intel SDE CI job)"
+            );
+            return;
+        }
+        // qpv % 8 != 0 (384->6, 768->12, 832->13) -> the masked tail runs.
+        for &dim in &[384usize, 768, 832] {
+            let n = 200usize;
+            let n_top = (dim / 4).max(1);
+            let mut rng = ChaCha8Rng::seed_from_u64(424_242 + dim as u64);
+            let corpus: Vec<f32> = (0..n * dim).map(|_| rng.random_range(-1.0..1.0)).collect();
+            let mut idx = Bitmap::new(dim, n_top);
+            idx.add(&corpus);
+            let qpv = idx.qwords_per_vec;
+            assert_ne!(qpv % 8, 0, "dim={dim} must force the masked tail");
+            let qbm = idx.build_query_bitmap_fp32(&corpus[..dim]);
+            let all_ids: Vec<u32> = (0..n as u32).collect();
+            let mut out = vec![0u32; n];
+            idx.body_overlap_scores_subset(&qbm, &all_ids, &mut out);
+            #[allow(clippy::needless_range_loop)]
+            for di in 0..n {
+                let off = di * qpv;
+                let ov = scalar_overlap(&idx.bitmaps[off..off + qpv], &qbm);
+                assert_eq!(out[di], ov, "masked-tail AVX-512 dim={dim} di={di}");
+            }
+        }
     }
 }
