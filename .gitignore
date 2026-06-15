@@ -2,6 +2,11 @@
 *.swp
 
 # Local index/serialisation artifacts produced by tests/benches.
+# Current `.ov*` magics plus the legacy `.tv*` ones (still loadable, files persist).
+*.ovr
+*.ovrq
+*.ovbm
+*.ovsb
 *.tvr
 *.tvrq
 *.tvbm

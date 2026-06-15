@@ -18,7 +18,7 @@ library default feature set is empty and does not depend on `clap`.
 
 ```sh
 ordvec-manifest create \
-  --index path/to/index.tvrq \
+  --index path/to/index.ovrq \
   --row-id-is-identity \
   --aux app.ids=path/to/ids.bin \
   --embedding-model bge-small-en-v1.5 \
@@ -163,9 +163,9 @@ paths, declared digest/length, and observed digest/length:
   "checked_at": "2026-06-03T17:20:00Z",
   "manifest_id": "urn:uuid:11111111-1111-4111-8111-111111111111",
   "artifact": {
-    "manifest_path": "index.tvrq",
-    "observed_path": "index.tvrq",
-    "canonical_path": "/srv/index/index.tvrq",
+    "manifest_path": "index.ovrq",
+    "observed_path": "index.ovrq",
+    "canonical_path": "/srv/index/index.ovrq",
     "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
     "size_bytes": 4096,
     "metadata": null
@@ -222,9 +222,9 @@ read and absent when the file is missing:
   "checked_at": "2026-06-03T17:21:00Z",
   "manifest_id": "urn:uuid:11111111-1111-4111-8111-111111111111",
   "artifact": {
-    "manifest_path": "index.tvrq",
-    "observed_path": "index.tvrq",
-    "canonical_path": "/srv/index/index.tvrq",
+    "manifest_path": "index.ovrq",
+    "observed_path": "index.ovrq",
+    "canonical_path": "/srv/index/index.ovrq",
     "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
     "size_bytes": 4096,
     "metadata": null

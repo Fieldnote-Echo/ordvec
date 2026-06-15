@@ -224,7 +224,7 @@ def test_save_load_roundtrip(tmp_path, bits):
     idx = RankQuant(dim=128, bits=bits)
     idx.add(vectors)
 
-    path = str(tmp_path / f"idx_b{bits}.tvrq")
+    path = str(tmp_path / f"idx_b{bits}.ovrq")
     idx.write(path)
     loaded = RankQuant.load(path)
 
@@ -242,7 +242,7 @@ def test_save_load_roundtrip(tmp_path, bits):
 
 def test_load_rejects_nonexistent_file():
     with pytest.raises(IOError):
-        RankQuant.load("/nonexistent/path/does-not-exist.tvrq")
+        RankQuant.load("/nonexistent/path/does-not-exist.ovrq")
 
 
 @pytest.mark.parametrize("bits", [1, 2, 4])

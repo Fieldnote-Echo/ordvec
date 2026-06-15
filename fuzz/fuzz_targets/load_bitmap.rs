@@ -1,5 +1,6 @@
-//! libFuzzer target for the `.tvbm` / `TVBM` loader, driven through the
-//! public `ordvec::Bitmap::load` entry point.
+//! libFuzzer target for the `.ovbm` / `OVBM` loader (which also accepts the
+//! legacy `.tvbm` / `TVBM` magic), driven through the public
+//! `ordvec::Bitmap::load` entry point.
 //!
 //! The low-level `rank_io::load_bitmap` parser is crate-internal
 //! (`pub(crate)`), so the fuzzer exercises it through `Bitmap::load` — which

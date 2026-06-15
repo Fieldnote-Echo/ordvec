@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn write_index(dir: &Path) -> PathBuf {
-    let path = dir.join("index.tvrq");
+    let path = dir.join("index.ovrq");
     let mut index = RankQuant::new(16, 2);
     let docs: Vec<f32> = (0..32).map(|i| i as f32 - 12.0).collect();
     index.add(&docs);
@@ -28,7 +28,7 @@ fn write_index(dir: &Path) -> PathBuf {
 }
 
 fn write_rankquant_index(dir: &Path, rows: usize) -> PathBuf {
-    let path = dir.join("index.tvrq");
+    let path = dir.join("index.ovrq");
     let mut index = RankQuant::new(16, 2);
     let docs: Vec<f32> = (0..16 * rows).map(|i| i as f32 - 12.0).collect();
     index.add(&docs);
@@ -47,7 +47,7 @@ enum FixtureKind {
 fn write_index_kind(dir: &Path, kind: FixtureKind) -> PathBuf {
     match kind {
         FixtureKind::Rank => {
-            let path = dir.join("index.tvr");
+            let path = dir.join("index.ovr");
             let mut index = Rank::new(8);
             index.add(&[
                 1.0, 3.0, 2.0, 4.0, 8.0, 7.0, 6.0, 5.0, 8.0, 6.0, 7.0, 5.0, 1.0, 2.0, 3.0, 4.0,
@@ -57,7 +57,7 @@ fn write_index_kind(dir: &Path, kind: FixtureKind) -> PathBuf {
         }
         FixtureKind::RankQuant => write_index(dir),
         FixtureKind::Bitmap => {
-            let path = dir.join("index.tvbm");
+            let path = dir.join("index.ovbm");
             let mut index = Bitmap::new(64, 16);
             let docs: Vec<f32> = (0..128).map(|i| ((i * 17) % 31) as f32).collect();
             index.add(&docs);
@@ -65,7 +65,7 @@ fn write_index_kind(dir: &Path, kind: FixtureKind) -> PathBuf {
             path
         }
         FixtureKind::SignBitmap => {
-            let path = dir.join("index.tvsb");
+            let path = dir.join("index.ovsb");
             let mut index = SignBitmap::new(64);
             let docs: Vec<f32> = (0usize..128)
                 .map(|i| if i.is_multiple_of(3) { 1.0 } else { -1.0 })
@@ -1939,7 +1939,7 @@ fn path_policy_rejects_escapes_and_absolute_paths_by_default() {
     )
     .unwrap();
 
-    manifest.artifact.path = "../index.tvrq".to_string();
+    manifest.artifact.path = "../index.ovrq".to_string();
     let report = verify_manifest_with_base(manifest.clone(), &base, VerifyOptions::default());
     assert!(report
         .errors
@@ -1986,7 +1986,7 @@ fn symlink_escape_reports_observed_canonical_path() {
     fs::create_dir(&base).unwrap();
     fs::create_dir(&outside).unwrap();
     let index = write_index(&outside);
-    symlink(&index, base.join("link.tvrq")).unwrap();
+    symlink(&index, base.join("link.ovrq")).unwrap();
     let manifest_path = base.join("manifest.json");
     let mut manifest = create_manifest_for_index_with_options(
         &index,
@@ -1999,7 +1999,7 @@ fn symlink_escape_reports_observed_canonical_path() {
         },
     )
     .unwrap();
-    manifest.artifact.path = "link.tvrq".to_string();
+    manifest.artifact.path = "link.ovrq".to_string();
 
     let report = verify_manifest_with_base(manifest.clone(), &base, VerifyOptions::default());
     assert!(report
@@ -2086,7 +2086,7 @@ fn verify_for_load_uses_explicit_index_override() {
         &manifest_path,
     )
     .unwrap();
-    manifest.artifact.path = "missing.tvrq".to_string();
+    manifest.artifact.path = "missing.ovrq".to_string();
     fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&manifest).unwrap(),
@@ -2096,7 +2096,7 @@ fn verify_for_load_uses_explicit_index_override() {
     let plan = verify_for_load(
         &manifest_path,
         VerifyOptions {
-            index_override: Some(PathBuf::from("index.tvrq")),
+            index_override: Some(PathBuf::from("index.ovrq")),
             ..VerifyOptions::default()
         },
     )
@@ -2108,7 +2108,7 @@ fn verify_for_load_uses_explicit_index_override() {
     );
     assert_eq!(
         plan.report().artifact.observed_path.as_deref(),
-        Some("index.tvrq")
+        Some("index.ovrq")
     );
 }
 
@@ -2215,7 +2215,7 @@ fn verify_for_load_fails_closed_with_report_for_default_path_policy() {
         },
     )
     .unwrap();
-    manifest.artifact.path = "../index.tvrq".to_string();
+    manifest.artifact.path = "../index.ovrq".to_string();
     fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&manifest).unwrap(),
@@ -2766,7 +2766,7 @@ fn attestation_shape_requires_matching_subject_sha256() {
     manifest.attestations.push(json!({
         "predicateType": "https://slsa.dev/provenance/v1",
         "predicate": {"builder": {"id": "builder"}},
-        "subject": [{"name": "index.tvrq", "digest": {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]
+        "subject": [{"name": "index.ovrq", "digest": {"sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}]
     }));
 
     let report = verify_manifest_with_base(manifest.clone(), temp.path(), VerifyOptions::default());
@@ -3044,7 +3044,7 @@ fn verify_index_manifest_uses_explicit_index_override() {
         &manifest_path,
     )
     .unwrap();
-    manifest.artifact.path = "missing.tvrq".to_string();
+    manifest.artifact.path = "missing.ovrq".to_string();
     fs::write(
         &manifest_path,
         serde_json::to_string_pretty(&manifest).unwrap(),
@@ -3052,7 +3052,7 @@ fn verify_index_manifest_uses_explicit_index_override() {
     .unwrap();
 
     let report = verify_index_manifest(
-        PathBuf::from("index.tvrq"),
+        PathBuf::from("index.ovrq"),
         &manifest_path,
         VerifyOptions::default(),
     )
@@ -3704,7 +3704,7 @@ fn sqlite_cache_key_is_scoped_to_manifest_location() {
     )
     .unwrap();
 
-    let index_b = case_b.join("index.tvrq");
+    let index_b = case_b.join("index.ovrq");
     let manifest_b = case_b.join("manifest.json");
     fs::copy(&index_a, &index_b).unwrap();
     fs::copy(&manifest_a, &manifest_b).unwrap();

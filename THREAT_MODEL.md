@@ -66,7 +66,7 @@ absence of a second maintainer is itself a tracked supply-chain residual
 
 | Layer | Components | Trust boundary |
 |---|---|---|
-| **Deserialization** | `rank_io.rs` — `.tvr` / `.tvrq` / `.tvbm` / `.tvsb` loaders | Untrusted filesystem / network byte stream |
+| **Deserialization** | `rank_io.rs` — `.ovr` / `.ovrq` / `.ovbm` / `.ovsb` loaders (also accept the legacy `.tvr` / `.tvrq` / `.tvbm` / `.tvsb` magics) | Untrusted filesystem / network byte stream |
 | **Manifest verification** | `ordvec-manifest` — JSON sidecar verifier | Manifest + index + optional row-map files before load |
 | **Compute kernels** | `fastscan.rs`, `quant_kernels.rs`, `bitmap.rs`, `sign_bitmap.rs` | Trust established after format validation |
 | **Index API** | `rank.rs`, `quant.rs`, `bitmap.rs`, `sign_bitmap.rs` | Caller-controlled query embeddings |
@@ -221,8 +221,8 @@ those kernels, and layering ASAN onto the existing SDE leg remains a follow-up.
 
 ### 4.1 C ABI defenses (code-verified)
 
-`ordvec-ffi` exposes only loaded `.tvrq` `RankQuant` and `.tvbm` `Bitmap`
-indexes through one opaque handle. The ABI checks raw pointer nullness and
+`ordvec-ffi` exposes only loaded `.ovrq` `RankQuant` and `.ovbm` `Bitmap`
+indexes (legacy `.tvrq` / `.tvbm` files also load) through one opaque handle. The ABI checks raw pointer nullness and
 caller-supplied lengths before use, requires exact v1 `struct_size` values for
 input structs, rejects unknown flags and nonzero reserved input fields,
 validates query dimension and finiteness before entering core search,

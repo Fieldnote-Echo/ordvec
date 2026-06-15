@@ -19,10 +19,14 @@ Contributions to the code, the docs, and the paper are all welcome.
   caveat. The Lean bitmap theorem proves a constant-weight overlap admission
   model under explicit assumptions; it is not a blanket retrieval guarantee.
 - **MSRV is Rust 1.89.** Don't use newer standard-library or language APIs.
-- **Stable surface.** The persistence file magics (`.tvr` / `.tvrq` /
-  `.tvbm` / `.tvsb`) and the public method names
-  (`new` / `add` / `search` / `search_asymmetric*` / `top_m_candidates*` /
-  `write` / `load`) are stable — please don't rename them.
+- **Stable surface.** The on-disk formats remain loadable forever: writers emit
+  the current `.ov*` magics (`.ovr` / `.ovrq` / `.ovbm` / `.ovsb`, renamed from
+  the turbovec-era `.tv*`), and the loaders accept **both** the current `.ov*`
+  and the legacy `.tv*` magics — so every file the crate has ever written still
+  loads. Only the write path changed; the read contract is never broken. The
+  public method names (`new` / `add` / `search` / `search_asymmetric*` /
+  `top_m_candidates*` / `write` / `load`) are likewise stable — please don't
+  rename them.
 - **Tests are required for new functionality.** As major new functionality
   is added, tests covering it MUST be added to the automated test suite
   (`cargo test`, plus `pytest` for the Python bindings). Changes that add

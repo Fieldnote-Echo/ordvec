@@ -515,12 +515,15 @@ impl Bitmap {
         last
     }
 
-    /// Persist to a `.tvbm` file. Format: 17-byte header + u64 bitmaps LE.
+    /// Persist to a `.ovbm` file. Format: 17-byte header + u64 bitmaps LE.
     pub fn write(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         crate::rank_io::write_bitmap(path, self.dim, self.n_top, self.n_vectors, &self.bitmaps)
     }
 
-    /// Load from a `.tvbm` file produced by [`Self::write`].
+    /// Load from a `.ovbm` file produced by [`Self::write`].
+    ///
+    /// Legacy `.tvbm` files (magic `TVBM`) written by older versions of this
+    /// crate are also accepted; newly written files use the `OVBM` magic.
     ///
     /// Returns `io::Error::InvalidData` on any constructor-invariant
     /// violation (`load_bitmap` already validates dim/n_top/n_vectors;
@@ -535,14 +538,14 @@ impl Bitmap {
         let expected = n_vectors.checked_mul(qpv).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "TVBM n_vectors * dim/64 overflows usize",
+                "OVBM n_vectors * dim/64 overflows usize",
             )
         })?;
         if bitmaps.len() != expected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "TVBM payload length {} does not match expected {expected} u64 lanes",
+                    "OVBM payload length {} does not match expected {expected} u64 lanes",
                     bitmaps.len(),
                 ),
             ));

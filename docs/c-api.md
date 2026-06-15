@@ -1,7 +1,7 @@
 # C API
 
-`ordvec-ffi` exposes a small ABI v1 for loading persisted `.tvrq`
-`RankQuant` and `.tvbm` `Bitmap` indexes and running synchronous single-query
+`ordvec-ffi` exposes a small ABI v1 for loading persisted `.ovrq`
+`RankQuant` and `.ovbm` `Bitmap` indexes and running synchronous single-query
 searches. The public header is [`../ordvec-ffi/include/ordvec.h`](../ordvec-ffi/include/ordvec.h).
 
 ## Build and Link
@@ -33,7 +33,7 @@ When linking dynamically, make sure your platform's loader can find
 
 int main(void) {
     ordvec_index_t *index = NULL;
-    ordvec_status_t st = ordvec_index_load("index.tvrq", 0, &index);
+    ordvec_status_t st = ordvec_index_load("index.ovrq", 0, &index);
     if (st != ORDVEC_STATUS_OK) {
         fprintf(stderr, "load failed: %s\n", ordvec_last_error());
         return 1;

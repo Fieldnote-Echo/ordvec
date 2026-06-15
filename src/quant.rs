@@ -861,10 +861,10 @@ impl RankQuant {
         last
     }
 
-    /// Persist to a `.tvrq` file. Format: 14-byte header + packed bytes.
+    /// Persist to a `.ovrq` file. Format: 14-byte header + packed bytes.
     ///
     /// # `b=8`
-    /// The `.tvrq` on-disk format and its loader currently support only
+    /// The `.ovrq` on-disk format and its loader currently support only
     /// `bits ∈ {1, 2, 4}`. `b=8` is an in-memory evidence/refinement surface
     /// in this phase; persisting it is a follow-up. To avoid writing a file
     /// that [`Self::load`] would then reject (a silent broken round-trip),
@@ -874,7 +874,7 @@ impl RankQuant {
         if self.bits == 8 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::Unsupported,
-                "RankQuant b=8 persistence is not supported yet (the .tvrq loader \
+                "RankQuant b=8 persistence is not supported yet (the .ovrq loader \
                  accepts bits ∈ {1, 2, 4}); b=8 is an in-memory evidence surface \
                  in this phase",
             ));
@@ -882,7 +882,10 @@ impl RankQuant {
         crate::rank_io::write_rankquant(path, self.bits, self.dim, self.n_vectors, &self.packed)
     }
 
-    /// Load from a `.tvrq` file produced by [`Self::write`].
+    /// Load from a `.ovrq` file produced by [`Self::write`].
+    ///
+    /// Legacy `.tvrq` files (magic `TVRQ`) written by older versions of this
+    /// crate are also accepted; newly written files use the `OVRQ` magic.
     ///
     /// Re-runs the same constructor invariants `RankQuant::new`
     /// enforces (`bits ∈ {1, 2, 4}`, `dim % (1 << bits) == 0`,
@@ -897,7 +900,7 @@ impl RankQuant {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "TVRQ dim {dim} is not a multiple of 2^bits = {n_buckets}; \
+                    "OVRQ dim {dim} is not a multiple of 2^bits = {n_buckets}; \
                      constant-composition invariant violated"
                 ),
             ));
@@ -906,7 +909,7 @@ impl RankQuant {
         if dim % codes_per_byte != 0 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!("TVRQ dim {dim} is not a multiple of codes_per_byte = {codes_per_byte}",),
+                format!("OVRQ dim {dim} is not a multiple of codes_per_byte = {codes_per_byte}",),
             ));
         }
         // `checked_mul` (not `saturating`): on a 32-bit target the byte count
@@ -917,7 +920,7 @@ impl RankQuant {
         let nv_dim = n_vectors.checked_mul(dim).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "TVRQ n_vectors * dim overflows usize",
+                "OVRQ n_vectors * dim overflows usize",
             )
         })?;
         let expected_bytes = nv_dim
@@ -926,14 +929,14 @@ impl RankQuant {
             .ok_or_else(|| {
                 std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    "TVRQ (n_vectors * dim) * bits overflows usize",
+                    "OVRQ (n_vectors * dim) * bits overflows usize",
                 )
             })?;
         if packed.len() != expected_bytes {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "TVRQ payload length {} does not match expected {expected_bytes}",
+                    "OVRQ payload length {} does not match expected {expected_bytes}",
                     packed.len(),
                 ),
             ));
@@ -1453,7 +1456,7 @@ fn validate_finite(values: &[f32], name: &'static str) -> Result<(), OrdvecError
 
 /// Standalone symmetric RankQuant-style eval search for arbitrary bit widths.
 ///
-/// This does **not** use [`RankQuant`] storage and does not change the `.tvrq`
+/// This does **not** use [`RankQuant`] storage and does not change the `.ovrq`
 /// packing contract. It rank-transforms `corpus` and `queries`, buckets each
 /// rank into `1 << bits` equal-width bins, mean-centres bucket ids, normalises
 /// by the **empirical** norm for that `(dim, bits)` (the exact L2 norm of the

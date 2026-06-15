@@ -1,5 +1,6 @@
-//! libFuzzer target for the `.tvrq` / `TVRQ` loader, driven through the
-//! public `ordvec::RankQuant::load` entry point.
+//! libFuzzer target for the `.ovrq` / `OVRQ` loader (which also accepts the
+//! legacy `.tvrq` / `TVRQ` magic), driven through the public
+//! `ordvec::RankQuant::load` entry point.
 //!
 //! The low-level `rank_io::load_rankquant` parser is crate-internal
 //! (`pub(crate)`), so the fuzzer exercises it through `RankQuant::load` —

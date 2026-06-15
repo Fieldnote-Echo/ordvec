@@ -1,8 +1,8 @@
 # Persisted Index Format
 
 This document is the compatibility contract for ordvec persisted index files.
-It covers the primitive index artifacts only: `.tvr`, `.tvrq`, `.tvbm`, and
-`.tvsb`. It does not define a database, transaction log, replication protocol,
+It covers the primitive index artifacts only: `.ovr`, `.ovrq`, `.ovbm`, and
+`.ovsb`. It does not define a database, transaction log, replication protocol,
 provenance system, checksum manifest, signature, or trust policy.
 
 All integer fields are little-endian. Each format has one fixed header followed
@@ -58,7 +58,7 @@ Example external segment entry:
 
 ```json
 {
-  "path": "segments/shard-0007/index.tvrq",
+  "path": "segments/shard-0007/index.ovrq",
   "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "metadata": {
     "kind": "RankQuant",
@@ -92,13 +92,16 @@ persisted row.
 
 ## Format Layouts
 
-### Rank (`.tvr`, magic `TVR1`)
+### Rank (`.ovr`, magic `OVR1`)
+
+Current writers emit magic `OVR1`. Loaders also accept the legacy magic `TVR1`
+(written by versions before the format rename).
 
 Header:
 
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
-| 0 | 4 | magic `TVR1` |
+| 0 | 4 | magic `OVR1` (or legacy `TVR1`) |
 | 4 | 1 | format version `1` |
 | 5 | 4 | `dim` as `u32` little-endian |
 | 9 | 4 | `n_vectors` as `u32` little-endian |
@@ -112,13 +115,16 @@ Probe metadata:
 - `params = Rank`
 - `bytes_per_vec = dim * 2`
 
-### RankQuant (`.tvrq`, magic `TVRQ`)
+### RankQuant (`.ovrq`, magic `OVRQ`)
+
+Current writers emit magic `OVRQ`. Loaders also accept the legacy magic `TVRQ`
+(written by versions before the format rename).
 
 Header:
 
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
-| 0 | 4 | magic `TVRQ` |
+| 0 | 4 | magic `OVRQ` (or legacy `TVRQ`) |
 | 4 | 1 | format version `1` |
 | 5 | 1 | `bits` as `u8`, one of `1`, `2`, or `4` |
 | 6 | 4 | `dim` as `u32` little-endian |
@@ -139,13 +145,16 @@ Probe metadata:
 - `params = RankQuant { bits }`
 - `bytes_per_vec = dim * bits / 8`
 
-### Bitmap (`.tvbm`, magic `TVBM`)
+### Bitmap (`.ovbm`, magic `OVBM`)
+
+Current writers emit magic `OVBM`. Loaders also accept the legacy magic `TVBM`
+(written by versions before the format rename).
 
 Header:
 
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
-| 0 | 4 | magic `TVBM` |
+| 0 | 4 | magic `OVBM` (or legacy `TVBM`) |
 | 4 | 1 | format version `1` |
 | 5 | 4 | `dim` as `u32` little-endian |
 | 9 | 4 | `n_top` as `u32` little-endian |
@@ -161,13 +170,16 @@ Probe metadata:
 - `params = Bitmap { n_top }`
 - `bytes_per_vec = dim / 8`
 
-### SignBitmap (`.tvsb`, magic `TVSB`)
+### SignBitmap (`.ovsb`, magic `OVSB`)
+
+Current writers emit magic `OVSB`. Loaders also accept the legacy magic `TVSB`
+(written by versions before the format rename).
 
 Header:
 
 | Offset | Bytes | Field |
 | ---: | ---: | --- |
-| 0 | 4 | magic `TVSB` |
+| 0 | 4 | magic `OVSB` (or legacy `TVSB`) |
 | 4 | 1 | format version `1` |
 | 5 | 4 | `dim` as `u32` little-endian |
 | 9 | 4 | `n_vectors` as `u32` little-endian |

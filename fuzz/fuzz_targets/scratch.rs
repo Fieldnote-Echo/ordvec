@@ -1,5 +1,6 @@
-//! Shared per-worker scratch temp file for the `.tvr` / `.tvrq` / `.tvbm` /
-//! `.tvsb` loader fuzz targets.
+//! Shared per-worker scratch temp file for the `.ovr` / `.ovrq` / `.ovbm` /
+//! `.ovsb` loader fuzz targets (the loaders also accept the legacy `.tv*`
+//! magics).
 //!
 //! # Why this exists (issue #6)
 //!

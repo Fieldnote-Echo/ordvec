@@ -134,7 +134,7 @@ impl SignBitmap {
     /// can be persisted via [`Self::write`] and reloaded via
     /// [`Self::load`] — without it, `new` could produce indices the
     /// loader refuses to round-trip (the issue Codex caught after the
-    /// first `.tvsb` revision used [`crate::rank_io::MAX_DIM`]'s
+    /// first `.ovsb` revision used [`crate::rank_io::MAX_DIM`]'s
     /// rank-storage `u16::MAX` cap, which doesn't apply to sign
     /// bitmaps).
     pub fn new(dim: usize) -> Self {
@@ -454,12 +454,15 @@ impl SignBitmap {
         last
     }
 
-    /// Persist to a `.tvsb` file. Format: 13-byte header + LE u64 bitmaps.
+    /// Persist to a `.ovsb` file. Format: 13-byte header + LE u64 bitmaps.
     pub fn write(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         crate::rank_io::write_sign_bitmap(path, self.dim, self.n_vectors, &self.bitmaps)
     }
 
-    /// Load from a `.tvsb` file produced by [`Self::write`].
+    /// Load from a `.ovsb` file produced by [`Self::write`].
+    ///
+    /// Legacy `.tvsb` files (magic `TVSB`) written by older versions of this
+    /// crate are also accepted; newly written files use the `OVSB` magic.
     ///
     /// Returns `io::Error::InvalidData` on any constructor-invariant
     /// violation. `load_sign_bitmap` already validates dim and n_vectors;
@@ -474,14 +477,14 @@ impl SignBitmap {
         let expected = n_vectors.checked_mul(qpv).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "TVSB n_vectors * dim/64 overflows usize",
+                "OVSB n_vectors * dim/64 overflows usize",
             )
         })?;
         if bitmaps.len() != expected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
-                    "TVSB payload length {} does not match expected {expected} u64 lanes",
+                    "OVSB payload length {} does not match expected {expected} u64 lanes",
                     bitmaps.len(),
                 ),
             ));

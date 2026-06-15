@@ -1,6 +1,6 @@
 # Index file provenance
 
-`ordvec` persists indexes as `.tvr` / `.tvrq` / `.tvbm` / `.tvsb` files and
+`ordvec` persists indexes as `.ovr` / `.ovrq` / `.ovbm` / `.ovsb` files and
 reloads them through `Rank::load`, `RankQuant::load`, `Bitmap::load`, and
 `SignBitmap::load`. This note states exactly **what the loaders guarantee and
 what they do not**, so you can decide whether an index file needs out-of-band

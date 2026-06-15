@@ -121,10 +121,14 @@ with documented migration steps.
 The primitive index formats are the files written and loaded by the core index
 types:
 
-- `.tvr` / `TVR1` for `Rank`;
-- `.tvrq` / `TVRQ` for `RankQuant`;
-- `.tvbm` / `TVBM` for `Bitmap`;
-- `.tvsb` / `TVSB` for `SignBitmap`.
+- `.ovr` / `OVR1` for `Rank`;
+- `.ovrq` / `OVRQ` for `RankQuant`;
+- `.ovbm` / `OVBM` for `Bitmap`;
+- `.ovsb` / `OVSB` for `SignBitmap`.
+
+Legacy files using the old turbovec-era magics (`TVR1`, `TVRQ`, `TVBM`, `TVSB`
+and extensions `.tvr`, `.tvrq`, `.tvbm`, `.tvsb`) are still accepted by current
+loaders. Writers no longer emit those magics.
 
 Patch releases should keep valid files from the same minor series loadable.
 Loader hardening may reject malformed files, forged sizes, trailing bytes, bad
