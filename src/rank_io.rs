@@ -365,6 +365,12 @@ pub fn probe_index_metadata(path: impl AsRef<Path>) -> io::Result<IndexMetadata>
         OVRQ_MAGIC | TVRQ_MAGIC => probe_rankquant_metadata(&mut f, file_size_bytes),
         OVBM_MAGIC | TVBM_MAGIC => probe_bitmap_metadata(&mut f, file_size_bytes),
         OVSB_MAGIC | TVSB_MAGIC => probe_sign_bitmap_metadata(&mut f, file_size_bytes),
+        // NOTE: `OVFS` (RankQuantFastscan) is intentionally NOT probed here.
+        // Surfacing it would need a new `IndexKind` variant, and `IndexKind` is
+        // not `#[non_exhaustive]`, so adding one is a breaking change — deferred
+        // to the 0.8.0 API re-architecture (#232). `.ovfs` files still round-trip
+        // via `RankQuantFastscan::{write,load}`; only this metadata-probe path is
+        // pending, and an `OVFS` magic falls through to the unknown-magic error.
         _ => Err(invalid("unknown ordvec index magic")),
     }
 }
