@@ -12,7 +12,7 @@ import ordvec_manifest
 def write_rankquant_index(path: Path, *, dim: int = 16, rows: int = 2, bits: int = 2):
     bytes_per_vec = dim * bits // 8
     path.write_bytes(
-        b"TVRQ"
+        b"OVRQ"
         + bytes([1, bits])
         + dim.to_bytes(4, "little")
         + rows.to_bytes(4, "little")
@@ -21,7 +21,7 @@ def write_rankquant_index(path: Path, *, dim: int = 16, rows: int = 2, bits: int
 
 
 def write_unloadable_manifest(tmp_path):
-    artifact = tmp_path / "index.tvrq"
+    artifact = tmp_path / "index.ovrq"
     artifact.write_bytes(b"not an ordvec index")
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
     manifest = {
@@ -92,7 +92,7 @@ def test_verify_for_load_preserves_manifest_io_errors(tmp_path):
 
 
 def test_create_manifest_requires_explicit_row_identity(tmp_path):
-    index = tmp_path / "index.tvrq"
+    index = tmp_path / "index.ovrq"
     index.write_bytes(b"not an ordvec index")
 
     with pytest.raises(ValueError, match="row_map or row_id_is_identity"):
@@ -100,7 +100,7 @@ def test_create_manifest_requires_explicit_row_identity(tmp_path):
 
 
 def test_create_manifest_accepts_auxiliary_artifacts(tmp_path):
-    index = tmp_path / "index.tvrq"
+    index = tmp_path / "index.ovrq"
     ids = tmp_path / "ids.bin"
     optional = tmp_path / "optional.json"
     manifest_path = tmp_path / "manifest.json"

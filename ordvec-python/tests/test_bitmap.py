@@ -139,7 +139,7 @@ def test_save_load_roundtrip(tmp_path):
     idx = Bitmap(dim=128, n_top=32)
     idx.add(vectors)
 
-    path = str(tmp_path / "idx.tvbm")
+    path = str(tmp_path / "idx.ovbm")
     idx.write(path)
     loaded = Bitmap.load(path)
 
@@ -157,7 +157,7 @@ def test_save_load_roundtrip(tmp_path):
 
 def test_load_rejects_nonexistent_file():
     with pytest.raises(IOError):
-        Bitmap.load("/nonexistent/path/does-not-exist.tvbm")
+        Bitmap.load("/nonexistent/path/does-not-exist.ovbm")
 
 
 def test_invalid_n_top_rejected():
@@ -236,7 +236,7 @@ def test_add_float64_is_coerced():
 def test_dim_above_u16_max_rejected():
     # dim = 65536 is a multiple of 64 but exceeds u16::MAX; the binding must
     # reject it with a clean ValueError (mirrors the core Bitmap::new guard and
-    # the .tvbm loader cap) rather than defer to a Rust panic on add/search.
+    # the .ovbm loader cap) rather than defer to a Rust panic on add/search.
     with pytest.raises(ValueError, match="u16 rank invariant"):
         Bitmap(dim=65_536, n_top=256)
 

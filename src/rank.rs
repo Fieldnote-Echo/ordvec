@@ -540,12 +540,15 @@ impl Rank {
         last
     }
 
-    /// Persist to a `.tvr` file. Format: 13-byte header + u16 ranks LE.
+    /// Persist to a `.ovr` file. Format: 13-byte header + u16 ranks LE.
     pub fn write(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         crate::rank_io::write_rank(path, self.dim, self.n_vectors, &self.ranks)
     }
 
-    /// Load from a `.tvr` file produced by [`Self::write`].
+    /// Load from a `.ovr` file produced by [`Self::write`].
+    ///
+    /// Legacy `.tvr` files (magic `TVR1`) written by older versions of this
+    /// crate are also accepted; newly written files use the `OVR1` magic.
     ///
     /// Returns `io::Error` (kind `InvalidData`) on any structural
     /// inconsistency between the header and the payload (`load_rank`
@@ -560,13 +563,13 @@ impl Rank {
         let expected = n_vectors.checked_mul(dim).ok_or_else(|| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "TVR1 n_vectors * dim overflows usize",
+                "OVR1 n_vectors * dim overflows usize",
             )
         })?;
         if ranks.len() != expected {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "TVR1 payload length does not match dim * n_vectors",
+                "OVR1 payload length does not match dim * n_vectors",
             ));
         }
         Ok(Self {

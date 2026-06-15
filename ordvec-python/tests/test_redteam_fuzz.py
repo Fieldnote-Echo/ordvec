@@ -867,8 +867,8 @@ def _write_real_rank(path: str) -> bytes:
 
 
 def test_rank_load_header_only_truncated_io_error(tmp_path):
-    data = _write_real_rank(str(tmp_path / "real.tvr"))
-    p = str(tmp_path / "trunc.tvr")
+    data = _write_real_rank(str(tmp_path / "real.ovr"))
+    p = str(tmp_path / "trunc.ovr")
     with open(p, "wb") as f:
         f.write(data[:13])  # header, zero payload
     with pytest.raises(IOError):
@@ -876,8 +876,8 @@ def test_rank_load_header_only_truncated_io_error(tmp_path):
 
 
 def test_rank_load_mid_payload_truncated_io_error(tmp_path):
-    data = _write_real_rank(str(tmp_path / "real.tvr"))
-    p = str(tmp_path / "half.tvr")
+    data = _write_real_rank(str(tmp_path / "real.ovr"))
+    p = str(tmp_path / "half.ovr")
     with open(p, "wb") as f:
         f.write(data[: len(data) // 2])
     with pytest.raises(IOError):
@@ -887,8 +887,8 @@ def test_rank_load_mid_payload_truncated_io_error(tmp_path):
 def test_rank_load_trailing_bytes_io_error(tmp_path):
     # A structurally-valid file with extra trailing bytes is rejected (v1 has no
     # footer) — guards against record-smuggling past a smaller declared payload.
-    data = _write_real_rank(str(tmp_path / "real.tvr"))
-    p = str(tmp_path / "ext.tvr")
+    data = _write_real_rank(str(tmp_path / "real.ovr"))
+    p = str(tmp_path / "ext.ovr")
     with open(p, "wb") as f:
         f.write(data + b"\x00" * 64)
     with pytest.raises(IOError):
@@ -899,9 +899,9 @@ def test_rank_load_forged_huge_n_vectors_io_error_no_oom(tmp_path):
     # Forge n_vectors (bytes 9..13) to ~268M into a tiny file. The DoS-alloc
     # hypothesis: a naive loader allocates n_vectors*dim*2 up front. The loader
     # must reject (MAX_VECTORS / payload-mismatch) BEFORE allocating.
-    data = bytearray(_write_real_rank(str(tmp_path / "real.tvr")))
+    data = bytearray(_write_real_rank(str(tmp_path / "real.ovr")))
     data[9:13] = struct.pack("<I", 0x0FFFFFFF)
-    p = str(tmp_path / "forged.tvr")
+    p = str(tmp_path / "forged.ovr")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError):
@@ -912,9 +912,9 @@ def test_rank_load_forged_huge_dim_io_error_no_oom(tmp_path):
     # Forge dim (bytes 5..9) to u16::MAX into a small file → declared payload
     # (n*dim*2) hugely exceeds the file; rejected by check_payload_matches_file
     # before any allocation.
-    data = bytearray(_write_real_rank(str(tmp_path / "real.tvr")))
+    data = bytearray(_write_real_rank(str(tmp_path / "real.ovr")))
     data[5:9] = struct.pack("<I", 0xFFFF)
-    p = str(tmp_path / "forged_dim.tvr")
+    p = str(tmp_path / "forged_dim.ovr")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError):
@@ -925,10 +925,10 @@ def test_rank_load_non_permutation_payload_io_error(tmp_path):
     # Zero the payload (every rank == 0) → valid shape but not a permutation of
     # [0, dim). The loader's per-row permutation check rejects it (a silently
     # wrong Spearman score would otherwise result).
-    data = bytearray(_write_real_rank(str(tmp_path / "real.tvr")))
+    data = bytearray(_write_real_rank(str(tmp_path / "real.ovr")))
     for i in range(13, len(data)):
         data[i] = 0
-    p = str(tmp_path / "nonperm.tvr")
+    p = str(tmp_path / "nonperm.ovr")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError, match="permutation"):
@@ -936,8 +936,8 @@ def test_rank_load_non_permutation_payload_io_error(tmp_path):
 
 
 def test_rank_load_wrong_magic_io_error(tmp_path):
-    data = _write_real_rank(str(tmp_path / "real.tvr"))
-    p = str(tmp_path / "magic.tvr")
+    data = _write_real_rank(str(tmp_path / "real.ovr"))
+    p = str(tmp_path / "magic.ovr")
     with open(p, "wb") as f:
         f.write(b"XXXX" + data[4:])
     with pytest.raises(IOError, match="magic"):
@@ -945,9 +945,9 @@ def test_rank_load_wrong_magic_io_error(tmp_path):
 
 
 def test_rank_load_wrong_version_io_error(tmp_path):
-    data = bytearray(_write_real_rank(str(tmp_path / "real.tvr")))
+    data = bytearray(_write_real_rank(str(tmp_path / "real.ovr")))
     data[4] = 99
-    p = str(tmp_path / "ver.tvr")
+    p = str(tmp_path / "ver.ovr")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError, match="version"):
@@ -955,7 +955,7 @@ def test_rank_load_wrong_version_io_error(tmp_path):
 
 
 def test_rank_load_zero_byte_file_io_error(tmp_path):
-    p = str(tmp_path / "zero.tvr")
+    p = str(tmp_path / "zero.ovr")
     open(p, "wb").close()
     with pytest.raises(IOError):
         Rank.load(p)
@@ -969,11 +969,11 @@ def test_rank_load_directory_io_error(tmp_path):
 def test_rankquant_load_forged_bits_io_error(tmp_path):
     idx = RankQuant(dim=128, bits=2)
     idx.add(unit_vectors(20, 128))
-    real = str(tmp_path / "real.tvrq")
+    real = str(tmp_path / "real.ovrq")
     idx.write(real)
     data = bytearray(open(real, "rb").read())
     data[5] = 3  # bits byte → invalid {1,2,4} domain
-    p = str(tmp_path / "bits3.tvrq")
+    p = str(tmp_path / "bits3.ovrq")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError, match="bits"):
@@ -985,12 +985,12 @@ def test_rankquant_load_corrupt_composition_io_error(tmp_path):
     # constant-composition invariant the analytical norm depends on.
     idx = RankQuant(dim=128, bits=2)
     idx.add(unit_vectors(20, 128))
-    real = str(tmp_path / "real.tvrq")
+    real = str(tmp_path / "real.ovrq")
     idx.write(real)
     data = bytearray(open(real, "rb").read())
     for i in range(14, len(data)):
         data[i] = 0xFF
-    p = str(tmp_path / "cc.tvrq")
+    p = str(tmp_path / "cc.ovrq")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError, match="composition"):
@@ -1000,11 +1000,11 @@ def test_rankquant_load_corrupt_composition_io_error(tmp_path):
 def test_bitmap_load_forged_n_top_io_error(tmp_path):
     idx = Bitmap(dim=128, n_top=32)
     idx.add(unit_vectors(20, 128))
-    real = str(tmp_path / "real.tvbm")
+    real = str(tmp_path / "real.ovbm")
     idx.write(real)
     data = bytearray(open(real, "rb").read())
     data[9:13] = struct.pack("<I", 0)  # n_top = 0 is invalid
-    p = str(tmp_path / "nt0.tvbm")
+    p = str(tmp_path / "nt0.ovbm")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError, match="n_top"):
@@ -1017,12 +1017,12 @@ def test_bitmap_load_corrupt_popcount_io_error(tmp_path):
     # assumes.
     idx = Bitmap(dim=128, n_top=32)
     idx.add(unit_vectors(20, 128))
-    real = str(tmp_path / "real.tvbm")
+    real = str(tmp_path / "real.ovbm")
     idx.write(real)
     data = bytearray(open(real, "rb").read())
     for i in range(17, len(data)):
         data[i] = 0
-    p = str(tmp_path / "pop0.tvbm")
+    p = str(tmp_path / "pop0.ovbm")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError, match="bits set"):
@@ -1032,11 +1032,11 @@ def test_bitmap_load_corrupt_popcount_io_error(tmp_path):
 def test_signbitmap_load_forged_small_dim_io_error(tmp_path):
     idx = SignBitmap(dim=128)
     idx.add(unit_vectors(20, 128))
-    real = str(tmp_path / "real.tvsb")
+    real = str(tmp_path / "real.ovsb")
     idx.write(real)
     data = bytearray(open(real, "rb").read())
     data[5:9] = struct.pack("<I", 32)  # below the [64, MAX] range
-    p = str(tmp_path / "d32.tvsb")
+    p = str(tmp_path / "d32.ovsb")
     with open(p, "wb") as f:
         f.write(bytes(data))
     with pytest.raises(IOError):
@@ -1044,8 +1044,8 @@ def test_signbitmap_load_forged_small_dim_io_error(tmp_path):
 
 
 def test_cross_format_load_wrong_magic_io_error(tmp_path):
-    # Load a .tvr file through SignBitmap.load → wrong magic, clean IOError.
-    real = str(tmp_path / "real.tvr")
+    # Load a .ovr file through SignBitmap.load → wrong magic, clean IOError.
+    real = str(tmp_path / "real.ovr")
     _write_real_rank(real)
     with pytest.raises(IOError, match="magic"):
         SignBitmap.load(real)
@@ -1055,14 +1055,14 @@ def test_load_nul_byte_path_io_error():
     # A path with an interior NUL cannot become a Rust CString → clean OSError,
     # not a panic. (write() guarded the same way.)
     with pytest.raises((IOError, ValueError)):
-        Rank.load("/tmp/ordvec\x00evil.tvr")
+        Rank.load("/tmp/ordvec\x00evil.ovr")
 
 
 def test_write_to_nonexistent_directory_io_error(tmp_path):
     idx = Rank(dim=64)
     idx.add(unit_vectors(3, 64))
     with pytest.raises(IOError):
-        idx.write(str(tmp_path / "nonexistent_dir" / "idx.tvr"))
+        idx.write(str(tmp_path / "nonexistent_dir" / "idx.ovr"))
 
 
 # =====================================================================
@@ -1077,11 +1077,11 @@ def test_dotdot_path_behaves_like_ordinary_file_op(tmp_path):
     nested = tmp_path / "a" / "b"
     nested.mkdir(parents=True)
     # ../../ from a/b resolves back to tmp_path — an ordinary relative path.
-    target = os.path.join(str(nested), "..", "..", "escaped.tvr")
+    target = os.path.join(str(nested), "..", "..", "escaped.ovr")
     idx = Rank(dim=64)
     idx.add(unit_vectors(5, 64))
     idx.write(target)
-    assert (tmp_path / "escaped.tvr").exists()  # normal fs resolution, nothing worse
+    assert (tmp_path / "escaped.ovr").exists()  # normal fs resolution, nothing worse
     reloaded = Rank.load(target)
     assert len(reloaded) == 5
 
@@ -1113,11 +1113,11 @@ def test_isolated_forged_huge_dim_load_no_abort():
     proc = _run_isolated(
         "import struct, tempfile, os\n"
         "with tempfile.TemporaryDirectory() as td:\n"
-        "    p = os.path.join(td, 'r.tvr')\n"
+        "    p = os.path.join(td, 'r.ovr')\n"
         "    idx = Rank(128); idx.add(uv(20, 128)); idx.write(p)\n"
         "    data = bytearray(open(p,'rb').read())\n"
         "    data[5:9] = struct.pack('<I', 0xFFFF)\n"  # huge dim
-        "    fp = os.path.join(td, 'forged.tvr')\n"
+        "    fp = os.path.join(td, 'forged.ovr')\n"
         "    open(fp,'wb').write(bytes(data))\n"
         "    try:\n"
         "        Rank.load(fp)\n"

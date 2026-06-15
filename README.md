@@ -329,7 +329,8 @@ clean-checkout kernel sanity check.
 
 ## Security: index-file trust
 
-The on-disk formats (`.tvr` / `.tvrq` / `.tvbm` / `.tvsb`) carry **no built-in
+The on-disk formats (`.ovr` / `.ovrq` / `.ovbm` / `.ovsb`; legacy `.tvr` /
+`.tvrq` / `.tvbm` / `.tvsb` files still load) carry **no built-in
 checksum, MAC, or signature — by design.** The loaders validate *structure*
 (magic, version, bounds, exact-length payload) but not *origin*: a
 structurally valid file can still be untrusted. If an index file crosses a

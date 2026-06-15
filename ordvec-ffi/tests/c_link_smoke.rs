@@ -25,7 +25,7 @@ fn write_file(path: &Path, body: &[u8]) {
 
 fn write_rankquant_fixture(path: &Path) {
     let mut bytes = Vec::new();
-    bytes.extend_from_slice(b"TVRQ");
+    bytes.extend_from_slice(b"OVRQ");
     bytes.push(1);
     bytes.push(2);
     bytes.extend_from_slice(&16u32.to_le_bytes());
@@ -98,7 +98,7 @@ fn c_program_links_and_runs_against_static_library() {
         lib.display()
     );
 
-    let fixture = temp_path("linked_fixture", "tvrq");
+    let fixture = temp_path("linked_fixture", "ovrq");
     write_rankquant_fixture(&fixture);
 
     let src = temp_path("linked_smoke", "c");

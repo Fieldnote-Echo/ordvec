@@ -1,5 +1,6 @@
-//! libFuzzer target for the `.tvr` / `TVR1` loader, driven through the
-//! public `ordvec::Rank::load` entry point.
+//! libFuzzer target for the `.ovr` / `OVR1` loader (which also accepts the
+//! legacy `.tvr` / `TVR1` magic), driven through the public `ordvec::Rank::load`
+//! entry point.
 //!
 //! The low-level `rank_io::load_rank` parser is crate-internal (`pub(crate)`),
 //! so the fuzzer exercises it through `Rank::load` — which runs that exact

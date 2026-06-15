@@ -169,7 +169,7 @@ def test_save_load_roundtrip(tmp_path):
     idx = SignBitmap(dim=128)
     idx.add(vectors)
 
-    path = str(tmp_path / "sign.tvsb")
+    path = str(tmp_path / "sign.ovsb")
     idx.write(path)
     loaded = SignBitmap.load(path)
 
@@ -178,7 +178,7 @@ def test_save_load_roundtrip(tmp_path):
     assert loaded.bytes_per_vec == idx.bytes_per_vec
 
     # Candidates from the loaded index must be byte-identical to
-    # candidates from the original — the .tvsb encoding is exact.
+    # candidates from the original — the .ovsb encoding is exact.
     q = unit_vectors(1, 128, seed=8)[0]
     c_orig = idx.top_m_candidates(q, m=10)
     c_load = loaded.top_m_candidates(q, m=10)
@@ -187,7 +187,7 @@ def test_save_load_roundtrip(tmp_path):
 
 def test_load_rejects_nonexistent_file():
     with pytest.raises(IOError):
-        SignBitmap.load("/nonexistent/path/does-not-exist.tvsb")
+        SignBitmap.load("/nonexistent/path/does-not-exist.ovsb")
 
 
 def test_add_float64_is_coerced():

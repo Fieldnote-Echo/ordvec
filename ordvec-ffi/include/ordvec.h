@@ -180,7 +180,8 @@ void ordvec_search_params_init(ordvec_search_params_t *params);
 void ordvec_search_stats_init(ordvec_search_stats_t *stats);
 
 /**
- * Load a `.tvrq` RankQuant or `.tvbm` Bitmap index.
+ * Load a `.ovrq` RankQuant or `.ovbm` Bitmap index (legacy `.tvrq` / `.tvbm`
+ * files are also accepted).
  *
  * # Safety
  *
@@ -190,8 +191,9 @@ void ordvec_search_stats_init(ordvec_search_stats_t *stats);
 ordvec_status_t ordvec_index_load(const char *path, uint64_t flags, ordvec_index_t **out);
 
 /**
- * Probe on-disk metadata for a `.tvrq` RankQuant or `.tvbm` Bitmap index
- * without loading payload rows into an index handle.
+ * Probe on-disk metadata for a `.ovrq` RankQuant or `.ovbm` Bitmap index
+ * (legacy `.tvrq` / `.tvbm` also accepted) without loading payload rows into an
+ * index handle.
  *
  * This validates the fixed header, declared dimensions, payload byte count,
  * and exact file length. Full row-invariant validation remains the job of

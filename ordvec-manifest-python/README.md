@@ -24,7 +24,7 @@ Create manifests with caller-owned sidecars by passing dictionaries with
 
 ```python
 manifest = ordvec_manifest.create_manifest(
-    "index.tvrq",
+    "index.ovrq",
     "index.manifest.json",
     "bge-small-en-v1.5",
     row_id_is_identity=True,

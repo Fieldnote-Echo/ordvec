@@ -1,10 +1,13 @@
 //! Read/write ordinal/sign index files.
 //!
-//! Four formats live here, each self-describing via a 4-byte magic:
-//! * `.tvr`  — [`Rank`](crate::Rank) — magic `TVR1`
-//! * `.tvrq` — [`RankQuant`](crate::RankQuant) — magic `TVRQ`
-//! * `.tvbm` — [`Bitmap`](crate::Bitmap) — magic `TVBM`
-//! * `.tvsb` — [`SignBitmap`](crate::SignBitmap) — magic `TVSB`
+//! Four formats live here, each self-describing via a 4-byte magic. Files
+//! written by this crate use the **`.ov*` / `OV*`** magics (the ordvec format);
+//! the legacy turbovec-era **`.tv*` / `TV*`** magics are still accepted on load
+//! for backward compatibility, but are never written:
+//! * `.ovr`  (legacy `.tvr`)  — [`Rank`](crate::Rank) — magic `OVR1` (also reads `TVR1`)
+//! * `.ovrq` (legacy `.tvrq`) — [`RankQuant`](crate::RankQuant) — magic `OVRQ` (also reads `TVRQ`)
+//! * `.ovbm` (legacy `.tvbm`) — [`Bitmap`](crate::Bitmap) — magic `OVBM` (also reads `TVBM`)
+//! * `.ovsb` (legacy `.tvsb`) — [`SignBitmap`](crate::SignBitmap) — magic `OVSB` (also reads `TVSB`)
 //!
 //! All formats are little-endian. Headers are small fixed-size structs
 //! followed by a single contiguous payload (the rank / packed / bitmap
@@ -59,6 +62,14 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
 use std::path::Path;
 
+// Current ordvec magics — written by this crate going forward.
+const OVR_MAGIC: &[u8; 4] = b"OVR1";
+const OVRQ_MAGIC: &[u8; 4] = b"OVRQ";
+const OVBM_MAGIC: &[u8; 4] = b"OVBM";
+const OVSB_MAGIC: &[u8; 4] = b"OVSB";
+// Legacy turbovec-era magics — still accepted on load for backward
+// compatibility, never written. Files produced before the ordvec rebrand carry
+// these; loaders accept either the `OV*` or the matching `TV*` magic.
 const TVR_MAGIC: &[u8; 4] = b"TVR1";
 const TVRQ_MAGIC: &[u8; 4] = b"TVRQ";
 const TVBM_MAGIC: &[u8; 4] = b"TVBM";
@@ -345,10 +356,10 @@ pub fn probe_index_metadata(path: impl AsRef<Path>) -> io::Result<IndexMetadata>
     let mut f = BufReader::new(file);
     let magic = read_magic(&mut f, "ordvec index")?;
     match &magic {
-        TVR_MAGIC => probe_rank_metadata(&mut f, file_size_bytes),
-        TVRQ_MAGIC => probe_rankquant_metadata(&mut f, file_size_bytes),
-        TVBM_MAGIC => probe_bitmap_metadata(&mut f, file_size_bytes),
-        TVSB_MAGIC => probe_sign_bitmap_metadata(&mut f, file_size_bytes),
+        OVR_MAGIC | TVR_MAGIC => probe_rank_metadata(&mut f, file_size_bytes),
+        OVRQ_MAGIC | TVRQ_MAGIC => probe_rankquant_metadata(&mut f, file_size_bytes),
+        OVBM_MAGIC | TVBM_MAGIC => probe_bitmap_metadata(&mut f, file_size_bytes),
+        OVSB_MAGIC | TVSB_MAGIC => probe_sign_bitmap_metadata(&mut f, file_size_bytes),
         _ => Err(invalid("unknown ordvec index magic")),
     }
 }
@@ -494,7 +505,7 @@ pub(crate) fn write_rank(
     check_payload_bytes(payload_bytes)?;
     assert_eq!(ranks.len(), payload_bytes / 2);
     let mut f = BufWriter::new(File::create(path)?);
-    f.write_all(TVR_MAGIC)?;
+    f.write_all(OVR_MAGIC)?;
     f.write_all(&[VERSION])?;
     f.write_all(&(dim as u32).to_le_bytes())?;
     f.write_all(&(n_vectors as u32).to_le_bytes())?;
@@ -515,8 +526,8 @@ pub(crate) fn load_rank(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec
     let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let magic = read_magic(&mut f, "TVR1")?;
-    if &magic != TVR_MAGIC {
-        return Err(invalid("not a TVR1 file: wrong magic"));
+    if &magic != OVR_MAGIC && &magic != TVR_MAGIC {
+        return Err(invalid("not an OVR1/TVR1 (Rank) file: wrong magic"));
     }
     read_version(&mut f, "TVR1")?;
     let dim = read_u32_le(&mut f, "TVR1", "dim")? as usize;
@@ -587,7 +598,7 @@ pub(crate) fn write_rankquant(
     check_payload_bytes(payload_bytes)?;
     assert_eq!(packed.len(), payload_bytes);
     let mut f = BufWriter::new(File::create(path)?);
-    f.write_all(TVRQ_MAGIC)?;
+    f.write_all(OVRQ_MAGIC)?;
     f.write_all(&[VERSION])?;
     f.write_all(&[bits])?;
     f.write_all(&(dim as u32).to_le_bytes())?;
@@ -607,8 +618,8 @@ pub(crate) fn load_rankquant(path: impl AsRef<Path>) -> io::Result<(u8, usize, u
     let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let magic = read_magic(&mut f, "TVRQ")?;
-    if &magic != TVRQ_MAGIC {
-        return Err(invalid("not a TVRQ file: wrong magic"));
+    if &magic != OVRQ_MAGIC && &magic != TVRQ_MAGIC {
+        return Err(invalid("not an OVRQ/TVRQ (RankQuant) file: wrong magic"));
     }
     read_version(&mut f, "TVRQ")?;
     let bits = read_u8_field(&mut f, "TVRQ", "bits")?;
@@ -697,7 +708,7 @@ pub(crate) fn write_bitmap(
     check_payload_bytes(payload_bytes)?;
     assert_eq!(bitmaps.len(), payload_bytes / 8);
     let mut f = BufWriter::new(File::create(path)?);
-    f.write_all(TVBM_MAGIC)?;
+    f.write_all(OVBM_MAGIC)?;
     f.write_all(&[VERSION])?;
     f.write_all(&(dim as u32).to_le_bytes())?;
     f.write_all(&(n_top as u32).to_le_bytes())?;
@@ -719,8 +730,8 @@ pub(crate) fn load_bitmap(path: impl AsRef<Path>) -> io::Result<(usize, usize, u
     let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let magic = read_magic(&mut f, "TVBM")?;
-    if &magic != TVBM_MAGIC {
-        return Err(invalid("not a TVBM file: wrong magic"));
+    if &magic != OVBM_MAGIC && &magic != TVBM_MAGIC {
+        return Err(invalid("not an OVBM/TVBM (Bitmap) file: wrong magic"));
     }
     read_version(&mut f, "TVBM")?;
     let dim = read_u32_le(&mut f, "TVBM", "dim")? as usize;
@@ -788,7 +799,7 @@ pub(crate) fn write_sign_bitmap(
     check_payload_bytes(payload_bytes)?;
     assert_eq!(bitmaps.len(), payload_bytes / 8);
     let mut f = BufWriter::new(File::create(path)?);
-    f.write_all(TVSB_MAGIC)?;
+    f.write_all(OVSB_MAGIC)?;
     f.write_all(&[VERSION])?;
     f.write_all(&(dim as u32).to_le_bytes())?;
     f.write_all(&(n_vectors as u32).to_le_bytes())?;
@@ -824,8 +835,8 @@ pub(crate) fn load_sign_bitmap(path: impl AsRef<Path>) -> io::Result<(usize, usi
     let file_len = file.metadata()?.len();
     let mut f = BufReader::new(file);
     let magic = read_magic(&mut f, "TVSB")?;
-    if &magic != TVSB_MAGIC {
-        return Err(invalid("not a TVSB file: wrong magic"));
+    if &magic != OVSB_MAGIC && &magic != TVSB_MAGIC {
+        return Err(invalid("not an OVSB/TVSB (SignBitmap) file: wrong magic"));
     }
     read_version(&mut f, "TVSB")?;
     let dim = read_u32_le(&mut f, "TVSB", "dim")? as usize;

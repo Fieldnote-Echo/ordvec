@@ -1,5 +1,6 @@
-//! libFuzzer target for the `.tvsb` / `TVSB` loader, driven through the
-//! public `ordvec::SignBitmap::load` entry point.
+//! libFuzzer target for the `.ovsb` / `OVSB` loader (which also accepts the
+//! legacy `.tvsb` / `TVSB` magic), driven through the public
+//! `ordvec::SignBitmap::load` entry point.
 //!
 //! The low-level `rank_io::load_sign_bitmap` parser is crate-internal
 //! (`pub(crate)`), so the fuzzer exercises it through `SignBitmap::load` —
@@ -13,7 +14,7 @@
 //! Contract: on arbitrary bytes the loader must return `Ok(..)` or
 //! `Err(..)` — never panic, abort, or read out of bounds. libFuzzer
 //! treats any panic/abort as a crash, so simply letting the result drop
-//! is the assertion. The `.tvsb` dim validation path differs from the
+//! is the assertion. The `.ovsb` dim validation path differs from the
 //! other three (`MAX_SIGN_BITMAP_DIM`, multiple-of-64), so it gets its
 //! own target rather than riding on `load_bitmap`.
 

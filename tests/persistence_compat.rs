@@ -100,7 +100,7 @@ fn assert_rejects_version_and_trailing_bytes<T>(
 #[test]
 fn rank_v1_fixture_bytes_are_stable() {
     let expected = [
-        b'T', b'V', b'R', b'1', 1, 4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 2, 0, 3, 0,
+        b'O', b'V', b'R', b'1', 1, 4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 2, 0, 3, 0,
     ];
     let path = tmp("rank");
 
@@ -129,7 +129,7 @@ fn rank_v1_fixture_bytes_are_stable() {
 #[test]
 fn rankquant_v1_fixture_bytes_are_stable() {
     let expected = [
-        b'T', b'V', b'R', b'Q', 1, 2, 8, 0, 0, 0, 1, 0, 0, 0, 0x05, 0xaf,
+        b'O', b'V', b'R', b'Q', 1, 2, 8, 0, 0, 0, 1, 0, 0, 0, 0x05, 0xaf,
     ];
     let path = tmp("rankquant");
 
@@ -159,7 +159,7 @@ fn rankquant_v1_fixture_bytes_are_stable() {
 #[test]
 fn bitmap_v1_fixture_bytes_are_stable() {
     let expected = [
-        b'T', b'V', b'B', b'M', 1, 64, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0,
+        b'O', b'V', b'B', b'M', 1, 64, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0,
     ];
     let path = tmp("bitmap");
 
@@ -190,7 +190,7 @@ fn bitmap_v1_fixture_bytes_are_stable() {
 #[test]
 fn sign_bitmap_v1_fixture_bytes_are_stable() {
     let expected = [
-        b'T', b'V', b'S', b'B', 1, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x80,
+        b'O', b'V', b'S', b'B', 1, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x80,
     ];
     let path = tmp("sign_bitmap");
 
@@ -219,4 +219,99 @@ fn sign_bitmap_v1_fixture_bytes_are_stable() {
     assert_rejects_version_and_trailing_bytes("sign_bitmap", &expected, |path| {
         SignBitmap::load(path)
     });
+}
+
+// Back-compat tests: files carrying the legacy TV* magic still load correctly.
+// The fixture body (everything after the 4-byte magic) is identical; only the
+// magic prefix differs.  These prove the "accept both OV* and TV* on load,
+// never write TV*" contract is upheld at the public index-type level.
+
+#[test]
+fn rank_v1_legacy_tv_magic_still_loads() {
+    // Fixture body from `rank_v1_fixture_bytes_are_stable`, magic swapped TV*.
+    let ov_fixture: &[u8] = &[
+        b'O', b'V', b'R', b'1', 1, 4, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 2, 0, 3, 0,
+    ];
+    let mut legacy = vec![b'T', b'V', b'R', b'1'];
+    legacy.extend_from_slice(&ov_fixture[4..]);
+
+    let path = tmp("rank_legacy_tv");
+    write_bytes(&path, &legacy);
+    let loaded = Rank::load(&path).unwrap();
+    assert_eq!(loaded.dim(), 4);
+    assert_eq!(loaded.len(), 1);
+
+    // Also confirm the OV* fixture loads to the same shape (round-trip parity).
+    let ov_path = tmp("rank_ov");
+    write_bytes(&ov_path, ov_fixture);
+    let ov_loaded = Rank::load(&ov_path).unwrap();
+    assert_eq!(loaded.dim(), ov_loaded.dim());
+    assert_eq!(loaded.len(), ov_loaded.len());
+}
+
+#[test]
+fn rankquant_v1_legacy_tv_magic_still_loads() {
+    let ov_fixture: &[u8] = &[
+        b'O', b'V', b'R', b'Q', 1, 2, 8, 0, 0, 0, 1, 0, 0, 0, 0x05, 0xaf,
+    ];
+    let mut legacy = vec![b'T', b'V', b'R', b'Q'];
+    legacy.extend_from_slice(&ov_fixture[4..]);
+
+    let path = tmp("rankquant_legacy_tv");
+    write_bytes(&path, &legacy);
+    let loaded = RankQuant::load(&path).unwrap();
+    assert_eq!(loaded.dim(), 8);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded.bits(), 2);
+
+    let ov_path = tmp("rankquant_ov");
+    write_bytes(&ov_path, ov_fixture);
+    let ov_loaded = RankQuant::load(&ov_path).unwrap();
+    assert_eq!(loaded.dim(), ov_loaded.dim());
+    assert_eq!(loaded.len(), ov_loaded.len());
+    assert_eq!(loaded.bits(), ov_loaded.bits());
+}
+
+#[test]
+fn bitmap_v1_legacy_tv_magic_still_loads() {
+    let ov_fixture: &[u8] = &[
+        b'O', b'V', b'B', b'M', 1, 64, 0, 0, 0, 2, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xc0,
+    ];
+    let mut legacy = vec![b'T', b'V', b'B', b'M'];
+    legacy.extend_from_slice(&ov_fixture[4..]);
+
+    let path = tmp("bitmap_legacy_tv");
+    write_bytes(&path, &legacy);
+    let loaded = Bitmap::load(&path).unwrap();
+    assert_eq!(loaded.dim(), 64);
+    assert_eq!(loaded.len(), 1);
+    assert_eq!(loaded.n_top(), 2);
+
+    let ov_path = tmp("bitmap_ov");
+    write_bytes(&ov_path, ov_fixture);
+    let ov_loaded = Bitmap::load(&ov_path).unwrap();
+    assert_eq!(loaded.dim(), ov_loaded.dim());
+    assert_eq!(loaded.len(), ov_loaded.len());
+    assert_eq!(loaded.n_top(), ov_loaded.n_top());
+}
+
+#[test]
+fn sign_bitmap_v1_legacy_tv_magic_still_loads() {
+    let ov_fixture: &[u8] = &[
+        b'O', b'V', b'S', b'B', 1, 64, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0x80,
+    ];
+    let mut legacy = vec![b'T', b'V', b'S', b'B'];
+    legacy.extend_from_slice(&ov_fixture[4..]);
+
+    let path = tmp("sign_bitmap_legacy_tv");
+    write_bytes(&path, &legacy);
+    let loaded = SignBitmap::load(&path).unwrap();
+    assert_eq!(loaded.dim(), 64);
+    assert_eq!(loaded.len(), 1);
+
+    let ov_path = tmp("sign_bitmap_ov");
+    write_bytes(&ov_path, ov_fixture);
+    let ov_loaded = SignBitmap::load(&ov_path).unwrap();
+    assert_eq!(loaded.dim(), ov_loaded.dim());
+    assert_eq!(loaded.len(), ov_loaded.len());
 }

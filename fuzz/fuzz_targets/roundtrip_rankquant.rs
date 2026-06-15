@@ -46,7 +46,7 @@ fuzz_target!(|data: &[u8]| {
         Ok(d) => d,
         Err(_) => return,
     };
-    let path = dir.path().join("roundtrip.tvrq");
+    let path = dir.path().join("roundtrip.ovrq");
     idx.write(&path).expect("write of a validly-built index must succeed");
     let reloaded = RankQuant::load(&path).expect("write output must reload (round-trip)");
     assert_eq!(reloaded.dim(), idx.dim());

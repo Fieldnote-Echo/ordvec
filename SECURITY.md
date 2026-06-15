@@ -15,8 +15,9 @@ Use GitHub's private vulnerability reporting:
 
 We aim to acknowledge reports within a few business days.
 
-`ordvec` parses serialized index files (`.tvr` / `.tvrq` / `.tvbm` /
-`.tvsb`); the loaders are fuzzed (`cargo +nightly fuzz`), so
+`ordvec` parses serialized index files (`.ovr` / `.ovrq` / `.ovbm` /
+`.ovsb`; the loaders also accept the legacy `.tvr` / `.tvrq` / `.tvbm` /
+`.tvsb` magics); the loaders are fuzzed (`cargo +nightly fuzz`), so
 parsing-robustness reports against the deserialization paths are especially
 welcome. Reports are also welcome against the `unsafe` SIMD kernels (shape /
 bounds invariants), the Python FFI contract (buffer handling, GIL discipline),

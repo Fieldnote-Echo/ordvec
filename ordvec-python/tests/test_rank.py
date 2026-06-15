@@ -117,7 +117,7 @@ def test_save_load_roundtrip(tmp_path):
     idx = Rank(dim=128)
     idx.add(vectors)
 
-    path = str(tmp_path / "idx.tvr")
+    path = str(tmp_path / "idx.ovr")
     idx.write(path)
     loaded = Rank.load(path)
 
@@ -133,7 +133,7 @@ def test_save_load_roundtrip(tmp_path):
 
 def test_load_rejects_nonexistent_file():
     with pytest.raises(IOError):
-        Rank.load("/nonexistent/path/does-not-exist.tvr")
+        Rank.load("/nonexistent/path/does-not-exist.ovr")
 
 
 def test_empty_index_search_does_not_panic():

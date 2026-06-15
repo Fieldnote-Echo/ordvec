@@ -512,7 +512,7 @@ impl Rank {
         Ok((scores, indices))
     }
 
-    /// Serialise the rank index to a `.tvr` file.
+    /// Serialise the rank index to a `.ovr` file.
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -522,7 +522,8 @@ impl Rank {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
-    /// Load a `Rank` index from a `.tvr` file previously written by [`Rank::write`].
+    /// Load a `Rank` index from a `.ovr` file previously written by [`Rank::write`]
+    /// (legacy `.tvr` files are also accepted).
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -695,7 +696,7 @@ impl RankQuant {
         Ok((scores, indices))
     }
 
-    /// Serialise the quantised index to a `.tvrq` file.
+    /// Serialise the quantised index to a `.ovrq` file.
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -705,7 +706,8 @@ impl RankQuant {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
-    /// Load a `RankQuant` index from a `.tvrq` file written by [`RankQuant::write`].
+    /// Load a `RankQuant` index from a `.ovrq` file written by [`RankQuant::write`]
+    /// (legacy `.tvrq` files are also accepted).
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -1154,7 +1156,7 @@ impl Bitmap {
         self.inner.is_empty()
     }
 
-    /// Serialise the bitmap index to a `.tvbm` file.
+    /// Serialise the bitmap index to a `.ovbm` file.
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -1164,7 +1166,8 @@ impl Bitmap {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
-    /// Load a `Bitmap` index from a `.tvbm` file written by [`Bitmap::write`].
+    /// Load a `Bitmap` index from a `.ovbm` file written by [`Bitmap::write`]
+    /// (legacy `.tvbm` files are also accepted).
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -1398,8 +1401,8 @@ impl SignBitmap {
         self.inner.is_empty()
     }
 
-    /// Persist the sign-bitmap payload to a `.tvsb` file. Format: 13-byte header
-    /// (`TVSB` magic + version + dim + n_vectors) + LE u64 bitmaps.
+    /// Persist the sign-bitmap payload to a `.ovsb` file. Format: 13-byte header
+    /// (`OVSB` magic + version + dim + n_vectors) + LE u64 bitmaps.
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -1409,9 +1412,10 @@ impl SignBitmap {
             .map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))
     }
 
-    /// Load a `SignBitmap` from a `.tvsb` file previously written by
-    /// [`SignBitmap::write`]. Raises `IOError` if the file is missing, malformed,
-    /// or its payload length disagrees with the header-declared shape.
+    /// Load a `SignBitmap` from a `.ovsb` file previously written by
+    /// [`SignBitmap::write`] (legacy `.tvsb` files are also accepted). Raises
+    /// `IOError` if the file is missing, malformed, or its payload length
+    /// disagrees with the header-declared shape.
     ///
     /// `path` is forwarded to the filesystem unmodified — no `..` / traversal
     /// sanitisation — so treat it as trusted input (see the module docstring).
@@ -1683,7 +1687,7 @@ fn search_asymmetric_byte_lut<'py>(
 ///
 /// This rank-transforms and buckets the raw `corpus`/`queries` matrices on the
 /// fly, so it supports non-byte-aligned widths such as `bits=3` without changing
-/// `RankQuant` storage or `.tvrq` persistence. Returns `(scores, indices)` with
+/// `RankQuant` storage or `.ovrq` persistence. Returns `(scores, indices)` with
 /// the same shape contract as `RankQuant.search`.
 #[pyfunction]
 fn rankquant_eval_search<'py>(

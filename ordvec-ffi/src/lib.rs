@@ -370,7 +370,7 @@ fn info_for_metadata(meta: &IndexMetadata) -> Result<ordvec_index_info_t, FfiErr
             IndexKind::Bitmap => ORDVEC_INDEX_KIND_BITMAP,
             IndexKind::Rank | IndexKind::SignBitmap => return Err(FfiError::new(
                 ORDVEC_STATUS_UNSUPPORTED_FORMAT,
-                "ABI v1 supports metadata probes only for TVRQ RankQuant and TVBM Bitmap indexes",
+                "ABI v1 supports metadata probes only for RankQuant and Bitmap indexes",
             )),
         };
     info.format_version = u32::from(meta.format_version);
@@ -671,7 +671,8 @@ pub unsafe extern "C" fn ordvec_search_stats_init(stats: *mut ordvec_search_stat
 }
 
 #[no_mangle]
-/// Load a `.tvrq` RankQuant or `.tvbm` Bitmap index.
+/// Load a `.ovrq` RankQuant or `.ovbm` Bitmap index (legacy `.tvrq` / `.tvbm`
+/// files are also accepted).
 ///
 /// # Safety
 ///
@@ -719,17 +720,19 @@ pub unsafe extern "C" fn ordvec_index_load(
             .map_err(|err| io_to_ffi(err, "stat index"))?
             .len();
 
+        // Accept both the current `OV*` magics and the legacy turbovec-era
+        // `TV*` magics (back-compat) — mirrors the loaders in `rank_io.rs`.
         let index = match &magic {
-            b"TVRQ" => LoadedIndex::RankQuant(
-                RankQuant::load(path).map_err(|err| io_to_ffi(err, "load TVRQ index"))?,
+            b"OVRQ" | b"TVRQ" => LoadedIndex::RankQuant(
+                RankQuant::load(path).map_err(|err| io_to_ffi(err, "load RankQuant index"))?,
             ),
-            b"TVBM" => LoadedIndex::Bitmap(
-                Bitmap::load(path).map_err(|err| io_to_ffi(err, "load TVBM index"))?,
+            b"OVBM" | b"TVBM" => LoadedIndex::Bitmap(
+                Bitmap::load(path).map_err(|err| io_to_ffi(err, "load Bitmap index"))?,
             ),
-            b"TVR1" | b"TVSB" => {
+            b"OVR1" | b"OVSB" | b"TVR1" | b"TVSB" => {
                 return Err(FfiError::new(
                     ORDVEC_STATUS_UNSUPPORTED_FORMAT,
-                    "ABI v1 supports only TVRQ RankQuant and TVBM Bitmap indexes",
+                    "ABI v1 supports only RankQuant and Bitmap indexes",
                 ))
             }
             _ => {
@@ -753,8 +756,9 @@ pub unsafe extern "C" fn ordvec_index_load(
 }
 
 #[no_mangle]
-/// Probe on-disk metadata for a `.tvrq` RankQuant or `.tvbm` Bitmap index
-/// without loading payload rows into an index handle.
+/// Probe on-disk metadata for a `.ovrq` RankQuant or `.ovbm` Bitmap index
+/// (legacy `.tv*` also accepted) without loading payload rows into an index
+/// handle.
 ///
 /// This validates the fixed header, declared dimensions, payload byte count,
 /// and exact file length. Full row-invariant validation remains the job of
@@ -992,7 +996,7 @@ mod tests {
     }
 
     fn make_rankquant_fixture() -> std::path::PathBuf {
-        let path = temp_path("rankquant", "tvrq");
+        let path = temp_path("rankquant", "ovrq");
         let mut index = RankQuant::new(16, 2);
         let doc: Vec<f32> = (0..16).map(|x| x as f32).collect();
         let mut corpus = Vec::new();
@@ -1005,7 +1009,7 @@ mod tests {
     }
 
     fn make_bitmap_fixture() -> std::path::PathBuf {
-        let path = temp_path("bitmap", "tvbm");
+        let path = temp_path("bitmap", "ovbm");
         let mut index = Bitmap::new(64, 4);
         let mut doc = vec![0.0f32; 64];
         for (j, value) in doc.iter_mut().take(4).enumerate() {
@@ -1454,20 +1458,20 @@ mod tests {
 
     #[test]
     fn load_maps_unsupported_and_corrupt_formats() {
-        let rank_path = temp_path("rank", "tvr");
+        let rank_path = temp_path("rank", "ovr");
         let mut rank = Rank::new(16);
         rank.add(&[0.0f32; 16]);
         rank.write(&rank_path).unwrap();
 
-        let sign_path = temp_path("sign", "tvsb");
+        let sign_path = temp_path("sign", "ovsb");
         let mut sign = SignBitmap::new(64);
         sign.add(&[0.0f32; 64]);
         sign.write(&sign_path).unwrap();
 
-        let corrupt_path = temp_path("corrupt", "tvrq");
+        let corrupt_path = temp_path("corrupt", "ovrq");
         std::fs::File::create(&corrupt_path)
             .unwrap()
-            .write_all(b"TVRQ\x01")
+            .write_all(b"OVRQ\x01")
             .unwrap();
 
         unsafe {

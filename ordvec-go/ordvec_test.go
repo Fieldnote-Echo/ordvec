@@ -13,11 +13,14 @@ import (
 	"testing"
 )
 
-func writeRankQuantFixture(t *testing.T) string {
+// writeRankQuantFixtureMagic builds a RankQuant fixture with the given 4-byte
+// magic and file extension. The loader accepts both the current "OVRQ" magic and
+// the legacy "TVRQ" magic, so this is parameterised to exercise both.
+func writeRankQuantFixtureMagic(t *testing.T, magic, ext string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "fixture.tvrq")
+	path := filepath.Join(t.TempDir(), "fixture."+ext)
 	var b []byte
-	b = append(b, []byte("TVRQ")...)
+	b = append(b, []byte(magic)...)
 	b = append(b, 1) // version
 	b = append(b, 2) // bits
 	b = binary.LittleEndian.AppendUint32(b, 16)
@@ -32,11 +35,18 @@ func writeRankQuantFixture(t *testing.T) string {
 	return path
 }
 
+// writeRankQuantFixture builds a RankQuant fixture in the current on-disk format
+// ("OVRQ" magic, ".ovrq" extension).
+func writeRankQuantFixture(t *testing.T) string {
+	t.Helper()
+	return writeRankQuantFixtureMagic(t, "OVRQ", "ovrq")
+}
+
 func writeBitmapFixture(t *testing.T) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "fixture.tvbm")
+	path := filepath.Join(t.TempDir(), "fixture.ovbm")
 	var b []byte
-	b = append(b, []byte("TVBM")...)
+	b = append(b, []byte("OVBM")...)
 	b = append(b, 1) // version
 	b = binary.LittleEndian.AppendUint32(b, 64)
 	b = binary.LittleEndian.AppendUint32(b, 4)
@@ -118,6 +128,25 @@ func TestLoadInfoSearchRankQuant(t *testing.T) {
 	}
 	if stats.UserTag != 99 || stats.CandidateCount != 4 || stats.VectorsScored != 4 || stats.ReturnedCount != 2 {
 		t.Fatalf("unexpected stats: %+v", stats)
+	}
+}
+
+// TestLoadsLegacyTVMagic confirms the C ABI still loads files written with the
+// pre-rename "TVRQ" magic (legacy turbovec-era on-disk format). New files are
+// written with "OVRQ"; the loader accepts both, so old indexes never break.
+func TestLoadsLegacyTVMagic(t *testing.T) {
+	idx, err := Load(writeRankQuantFixtureMagic(t, "TVRQ", "tvrq"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer idx.Close()
+
+	info, err := idx.Info()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Kind != KindRankQuant || info.Dim != 16 || info.BitWidth != 2 || info.VectorCount != 4 {
+		t.Fatalf("unexpected info from legacy TVRQ fixture: %+v", info)
 	}
 }
 
@@ -253,14 +282,14 @@ func TestTypedStatusErrors(t *testing.T) {
 		t.Fatalf("unexpected status: %v", statusErr.Status)
 	}
 
-	_, err = Load(filepath.Join(t.TempDir(), "missing.tvrq"))
+	_, err = Load(filepath.Join(t.TempDir(), "missing.ovrq"))
 	if !errors.As(err, &statusErr) || statusErr.Status != StatusIO {
 		t.Fatalf("missing file should be IO status, got %T %[1]v", err)
 	}
 }
 
 func TestLoadRejectsNullBytePath(t *testing.T) {
-	_, err := Load("bad\x00path.tvrq")
+	_, err := Load("bad\x00path.ovrq")
 	if err == nil || !strings.Contains(err.Error(), "null byte") {
 		t.Fatalf("Load should reject null byte paths, got %v", err)
 	}
