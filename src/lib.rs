@@ -27,6 +27,12 @@
 //!   coordinate, set when the coordinate is positive) for sign-cosine
 //!   candidate generation.
 //!
+//! For b=2 specifically, [`RankQuantFastscan`] is a specialized companion to
+//! [`RankQuant`] — a block-32 FastScan kernel (nibble LUT; AVX-512 → AVX2 →
+//! scalar dispatch) for absolute-minimum stage-1 scan latency, trading 2× the
+//! b=2 storage and 8-bit LUT scoring noise. Reach for it only when scan latency
+//! is the binding constraint.
+//!
 //! These four families are the retrieval surface. The `experimental`
 //! `MultiBucketBitmap` indexed contingency / projection API is a niche
 //! research/analysis substrate for the bilinear bucket-overlap decomposition —
@@ -162,11 +168,12 @@ pub use const_weight_bitmap::{
     choose, top_group_overlap_vector, BitmapNull, ConstantWeightBitmap, PackedConstantWeightBitmap,
 };
 
-// `RankQuantFastscan` is an optional FastScan b=2 scan path. It is
-// re-exported `#[doc(hidden)]` at the crate root — reachable as
-// `ordvec::RankQuantFastscan` for callers who opt in, but not
-// advertised alongside the headline index types above.
-#[doc(hidden)]
+// `RankQuantFastscan` is a specialized b=2 FastScan scan path (block-32 nibble
+// LUT, AVX-512 → AVX2 → scalar dispatch) for absolute-minimum stage-1 scan
+// latency, at the cost of 2× the `RankQuant` b=2 storage and 8-bit LUT scoring
+// noise. It is a stable, documented public type, but a *specialized* one — the
+// headline retrieval surface is still `RankQuant` / `Bitmap` / two-stage; reach
+// for FastScan only when scan latency at b=2 is the binding constraint.
 pub use fastscan::RankQuantFastscan;
 
 /// Whether the AVX-512 VPOPCNTDQ bitmap/sign scan kernels are active on this

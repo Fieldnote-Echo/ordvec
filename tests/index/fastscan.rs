@@ -262,3 +262,121 @@ fn fastscan_new_rejects_dim_above_u16_max() {
     // by the u16 bound — not deferred to a panic on the first add().
     let _ = RankQuantFastscan::new(65_536);
 }
+
+// ---------------------------------------------------------------------
+// Persistence: `.ovfs` (magic `OVFS`) write/load round-trip + validation.
+// ---------------------------------------------------------------------
+
+fn fs_tmp(name: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "ordvec_fastscan_{}_{}.ovfs",
+        name,
+        std::process::id()
+    ))
+}
+
+#[test]
+fn fastscan_write_load_roundtrip_searches_identically() {
+    const FD: usize = 128;
+    const FN: usize = 200;
+    let mut rng = ChaCha8Rng::seed_from_u64(909090);
+    let docs: Vec<f32> = (0..FN * FD).map(|_| rng.random_range(-1.0..1.0)).collect();
+    let queries: Vec<f32> = (0..4 * FD).map(|_| rng.random_range(-1.0..1.0)).collect();
+
+    let mut idx = RankQuantFastscan::new(FD);
+    idx.add(&docs);
+    let before = idx.search(&queries, 10);
+
+    let path = fs_tmp("roundtrip");
+    idx.write(&path).unwrap();
+    let loaded = RankQuantFastscan::load(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+
+    // Reloaded index reports the same shape and scans byte-identically: the
+    // packed buffer is the same, so scores/indices match exactly (no recompute).
+    assert_eq!(loaded.dim(), FD);
+    assert_eq!(loaded.len(), FN);
+    assert_eq!(loaded.byte_size(), idx.byte_size());
+    let after = loaded.search(&queries, 10);
+    assert_eq!(after.indices, before.indices, "reloaded indices must match");
+    assert_eq!(after.scores, before.scores, "reloaded scores must match");
+}
+
+#[test]
+fn fastscan_empty_index_roundtrips() {
+    let idx = RankQuantFastscan::new(64); // never add()-ed → 0 vectors, empty payload
+    let path = fs_tmp("empty");
+    idx.write(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    let loaded = RankQuantFastscan::load(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert_eq!(bytes.len(), 13, "empty .ovfs is header-only (no payload)");
+    assert_eq!(&bytes[0..4], b"OVFS", "magic is OVFS");
+    assert_eq!(loaded.dim(), 64);
+    assert_eq!(loaded.len(), 0);
+    assert!(loaded.is_empty());
+}
+
+#[test]
+fn fastscan_written_file_starts_with_ovfs_magic() {
+    let mut idx = RankQuantFastscan::new(64);
+    idx.add(&vec![0.5f32; 64 * 40]);
+    let path = fs_tmp("magic");
+    idx.write(&path).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    std::fs::remove_file(&path).ok();
+    assert_eq!(&bytes[0..4], b"OVFS");
+}
+
+#[test]
+fn fastscan_load_rejects_wrong_magic() {
+    let mut idx = RankQuantFastscan::new(64);
+    idx.add(&vec![0.25f32; 64 * 40]);
+    let path = fs_tmp("badmagic");
+    idx.write(&path).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes[0..4].copy_from_slice(b"OVRQ"); // a different (valid) ordvec magic
+    std::fs::write(&path, &bytes).unwrap();
+    let err = match RankQuantFastscan::load(&path) {
+        Ok(_) => panic!("expected load error, got Ok"),
+        Err(e) => e,
+    };
+    std::fs::remove_file(&path).ok();
+    assert!(err.to_string().contains("OVFS"), "got: {err}");
+}
+
+#[test]
+fn fastscan_load_rejects_trailing_bytes() {
+    let mut idx = RankQuantFastscan::new(64);
+    idx.add(&vec![-0.3f32; 64 * 40]);
+    let path = fs_tmp("trailing");
+    idx.write(&path).unwrap();
+    let mut bytes = std::fs::read(&path).unwrap();
+    bytes.push(0xAB); // one trailing byte past the declared payload
+    std::fs::write(&path, &bytes).unwrap();
+    let err = match RankQuantFastscan::load(&path) {
+        Ok(_) => panic!("expected load error, got Ok"),
+        Err(e) => e,
+    };
+    std::fs::remove_file(&path).ok();
+    // A structurally-valid file with trailing bytes is rejected.
+    assert!(!err.to_string().is_empty());
+}
+
+#[test]
+fn fastscan_load_rejects_dim_not_multiple_of_4() {
+    // Forge a header with dim = 66 (even but % 4 == 2) and zero payload.
+    let path = fs_tmp("baddim");
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(b"OVFS");
+    bytes.push(1); // version
+    bytes.extend_from_slice(&66u32.to_le_bytes()); // dim = 66
+    bytes.extend_from_slice(&0u32.to_le_bytes()); // n_vectors = 0
+    std::fs::write(&path, &bytes).unwrap();
+    let err = match RankQuantFastscan::load(&path) {
+        Ok(_) => panic!("expected load error, got Ok"),
+        Err(e) => e,
+    };
+    std::fs::remove_file(&path).ok();
+    assert!(err.to_string().contains("multiple of 4"), "got: {err}");
+}
