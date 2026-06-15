@@ -27,8 +27,8 @@ That runs the head-to-head on a structured synthetic corpus (D=256,
 N=30,000, 200 queries, 200 cluster prototypes, latent_dim=64; see
 [Stress test](#stress-test-low-rank-clustered-synthetic) for the
 exact construction). Results on real embedding corpora are
-user-runnable via `--corpus-npy` / `--queries-npy`; the current
-arXiv paper-harness result is summarized in the README and the
+user-runnable via `--corpus-npy` / `--queries-npy`, and the reproducible
+BEIR harness (`make benchmark-beir`) is summarized in the README; the
 reproduction shape is described under
 [External-corpus results](#external-corpus-results-user-runnable).
 
@@ -56,7 +56,7 @@ to the top-k scores at finalize so the displayed cosines stay exact.
 |---|---|
 | CPU | AMD Ryzen 9 9950X (Zen 5, 16C/32T, full 512-bit AVX-512 datapath) |
 | OS | CachyOS Linux |
-| Compiler | rustc 1.95.0 |
+| Compiler | rustc 1.95.0 (bench machine toolchain; the crate MSRV is 1.89 — see [compatibility-policy.md](./compatibility-policy.md)) |
 | Build | `cargo build --release` with `lto = true, codegen-units = 1, opt-level = 3` |
 | Detected SIMD | sse4.2, avx2, fma, avx512f, avx512bw, avx512vl |
 | Latency mode | single-thread per query (rayon parallelises *across* queries; per-query rows measure scan only) |
@@ -175,7 +175,7 @@ under [Stress test](#stress-test-low-rank-clustered-synthetic) — it
 is a generated Gaussian low-rank fixture, useful for exercising the
 rank-mode kernels and their size/latency tradeoffs. Treat its recall
 spread as a stress-test result, not the lead retrieval-quality claim;
-the current real-embedding arXiv benchmark in the README is the better
+the reproducible BEIR benchmark in the README is the better
 guide to retrieval-relevant ordinal behaviour.
 
 Results are with the AVX-512 asymmetric scan enabled where applicable
@@ -253,8 +253,8 @@ but it is still a generated Gaussian fixture. It is useful for
 self-contained kernel checks and for stressing the compression modes;
 it should not be read as the strongest evidence for the retrieval task.
 Real sentence/passage embeddings are anisotropic in task-specific ways,
-and the current arXiv source-recovery benchmark is more favorable to
-the rank transform than this small synthetic fixture.
+and real-corpus benchmarks (the reproducible BEIR harness in the README)
+are more favorable to the rank transform than this small synthetic fixture.
 
 ## What the head-to-head shows
 
@@ -383,14 +383,13 @@ minimal built-in reader — no Python dependency at bench time, and no
 BLAS.
 
 What to expect from real embeddings: dense sentence/passage encoders
-often carry retrieval signal in their coordinate order. The current
-paper-harness arXiv run (207,695 embeddings, 7,200 source-recovery
-queries) has full ordinal rank-cosine within bootstrap noise of dense
-exact search and slightly ahead of the tested FAISS HNSW configuration;
-RankQuant b=2 asym matches that HNSW configuration within bootstrap
-noise at 256 bytes/vector. Run the command above on your target
-embeddings to get the number that matters for your deployment — the
-arXiv artifact set is not shipped in this crate.
+often carry retrieval signal in their coordinate order. The reproducible
+in-repo BEIR harness (`make benchmark-beir`, summarized in the README) is
+the sanctioned real-corpus measurement — on public BEIR data, ordvec's
+ordinal modes (`RankQuant` b=2 / b=4) land within bootstrap noise of dense
+exact search at 8–16× smaller vectors. Run the command above on your
+target embeddings to get the number that matters for your deployment; no
+external corpus is shipped in this crate.
 
 ## A null result reported up front
 
@@ -431,10 +430,11 @@ Candidate IDs are global row ordinals; duplicate candidates are scored as
 separate entries and can produce duplicate hits, so callers that need
 unique output rows should deduplicate candidate lists before reranking.
 
-`RankQuantFastscan` (re-exported `#[doc(hidden)]`) is an optional
-single-pass b=2 fast path; it supports `add`/`search` but not
-`swap_remove`/`write`/`load` (see its module docs in
-`src/fastscan.rs`). `MultiBucketBitmap` underwrites the
+`RankQuantFastscan` is a stable, public (but specialized) single-pass b=2
+fast path; it supports `add`/`search`/`write`/`load` (`.ovfs` persistence,
+magic `OVFS`) but not `swap_remove` (see its module docs in
+`src/fastscan.rs`). Metadata-probe support via `probe_index_metadata` is
+deferred to 0.8.0 (#232). `MultiBucketBitmap` underwrites the
 bilinear bucket-overlap decomposition and is reachable only behind the
 `experimental` feature.
 
@@ -516,11 +516,11 @@ multi-seed stability is your call.
    because there is no rotation matmul and no codebook fit — the
    per-vector cost is the `argsort`.
 4. **Recall is corpus-dependent.** The generated Gaussian fixture is a
-   stress test, not the lead quality claim. On the current real arXiv
-   embedding task, full ordinal rank-cosine is within bootstrap noise
-   of dense exact search, and RankQuant b=2 asym matches the tested
-   FAISS HNSW configuration within bootstrap noise. Run the
-   external-corpus bench on your data — see above.
+   stress test, not the lead quality claim. On public BEIR data (the
+   reproducible `make benchmark-beir` harness in the README), ordvec's
+   ordinal modes land within bootstrap noise of dense exact search at a
+   fraction of the storage. Run the external-corpus bench on your data —
+   see above.
 5. **The audit-by-removal rationale.** RankQuant removes training,
    rotation, codebooks, and per-document norms from the pipeline. That
    retrieval still works after the removal is the interesting result:

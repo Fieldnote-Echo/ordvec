@@ -7,10 +7,10 @@
 //! This is the **SimHash family** primitive (Charikar 2002) applied to
 //! native embedding coords rather than random projections. For
 //! contrastively-trained embeddings (e.g. BGE or OpenAI ada), the
-//! native coord axes already carry semantically-aligned
-//! signal — making direct sign quantization competitive with, and
-//! sometimes superior to, learned hash codes or rank-thresholded
-//! bitmaps at the same byte budget.
+//! native coord axes already carry semantically-aligned signal, so the
+//! sign pattern alone preserves much of the angular structure that cosine
+//! ranking depends on — which is what lets a `dim/8`-byte sign code serve
+//! as a useful candidate-generation substrate.
 //!
 //! Score: `agreement(q, d) = dim - popcount(q ^ d)`. The kernel
 //! computes the per-doc Hamming distance via popcount(XOR); the

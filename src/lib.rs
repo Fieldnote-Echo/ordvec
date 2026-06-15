@@ -33,7 +33,9 @@
 //! b=2 storage and 8-bit LUT scoring noise. Reach for it only when scan latency
 //! is the binding constraint.
 //!
-//! These four families are the retrieval surface. The `experimental`
+//! These four families are the headline retrieval surface, with
+//! [`RankQuantFastscan`] as the specialized b=2 latency companion above. The
+//! `experimental`
 //! `MultiBucketBitmap` indexed contingency / projection API is a niche
 //! research/analysis substrate for the bilinear bucket-overlap decomposition —
 //! it is **not** a default single-score retrieval path and was never

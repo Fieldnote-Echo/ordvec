@@ -15,12 +15,12 @@
 //! a single-shot `add()` (the block layout's tail padding does not
 //! compose with incremental extend).
 //!
-//! This module is intentionally *not* part of the headline API. The
-//! [`RankQuantFastscan`] wrapper is re-exported `#[doc(hidden)]`
-//! and the free [`search_asymmetric_fastscan_b2`] entry point is
-//! `pub(crate)`: production callers should reach for
+//! [`RankQuantFastscan`] is a stable, documented *but specialized* public
+//! type — not the headline API. The free [`search_asymmetric_fastscan_b2`]
+//! entry point stays `pub(crate)`: production callers should reach for
 //! [`RankQuant::search_asymmetric`](crate::RankQuant::search_asymmetric),
-//! whose AVX-512 → AVX2 → scalar dispatch is the maintained surface.
+//! whose AVX-512 → AVX2 → scalar dispatch is the maintained surface. Prefer
+//! FastScan only when b=2 scan latency is the binding constraint.
 //! This latency path is not part of the constant-weight bitmap overlap
 //! calibration theorem.
 //!
