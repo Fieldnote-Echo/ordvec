@@ -1,6 +1,6 @@
 //! Read/write ordinal/sign index files.
 //!
-//! Four formats live here, each self-describing via a 4-byte magic. Files
+//! Five formats live here, each self-describing via a 4-byte magic. Files
 //! written by this crate use the **`.ov*` / `OV*`** magics (the ordvec format);
 //! the legacy turbovec-era **`.tv*` / `TV*`** magics are still accepted on load
 //! for backward compatibility, but are never written:
@@ -8,6 +8,8 @@
 //! * `.ovrq` (legacy `.tvrq`) — [`RankQuant`](crate::RankQuant) — magic `OVRQ` (also reads `TVRQ`)
 //! * `.ovbm` (legacy `.tvbm`) — [`Bitmap`](crate::Bitmap) — magic `OVBM` (also reads `TVBM`)
 //! * `.ovsb` (legacy `.tvsb`) — [`SignBitmap`](crate::SignBitmap) — magic `OVSB` (also reads `TVSB`)
+//! * `.ovfs` — [`RankQuantFastscan`](crate::RankQuantFastscan) — magic `OVFS`
+//!   (new in the ordvec format; no legacy counterpart)
 //!
 //! All formats are little-endian. Headers are small fixed-size structs
 //! followed by a single contiguous payload (the rank / packed / bitmap
@@ -67,6 +69,9 @@ const OVR_MAGIC: &[u8; 4] = b"OVR1";
 const OVRQ_MAGIC: &[u8; 4] = b"OVRQ";
 const OVBM_MAGIC: &[u8; 4] = b"OVBM";
 const OVSB_MAGIC: &[u8; 4] = b"OVSB";
+// FastScan b=2 block-32 layout (`RankQuantFastscan`). New in the ordvec format —
+// there is no turbovec-era counterpart, so it has no legacy magic.
+const OVFS_MAGIC: &[u8; 4] = b"OVFS";
 // Legacy turbovec-era magics — still accepted on load for backward
 // compatibility, never written. Files produced before the ordvec rebrand carry
 // these; loaders accept either the `OV*` or the matching `TV*` magic.
@@ -856,6 +861,81 @@ pub(crate) fn load_sign_bitmap(path: impl AsRef<Path>) -> io::Result<(usize, usi
     // structural validation above (magic, version, dim, n_vectors, payload
     // length) is therefore complete for this format — nothing further to verify.
     Ok((dim, n_vectors, bitmaps))
+}
+
+// -------------------------------------------------------------------
+// RankQuantFastscan: b=2 block-32 FastScan layout.
+// Header: magic(4) | version(1) | dim(u32 LE) | n_vectors(u32 LE) = 13 B
+// Payload: n_blocks * (dim/2) * 32 bytes, n_blocks = ceil(n_vectors / 32).
+// New ordvec format (no legacy TV* counterpart).
+// -------------------------------------------------------------------
+
+fn fastscan_payload_bytes(dim: usize, vector_count: usize) -> io::Result<usize> {
+    // FastScan b=2 packs 32 docs per block; each block holds `pairs * 32` bytes
+    // (`pairs = dim / 2`). `dim % 4 == 0` is enforced by the loader / constructor
+    // before this is called, so `dim / 2` is exact. An empty corpus has zero
+    // blocks and zero payload.
+    let n_blocks = vector_count.div_ceil(32);
+    let pairs = dim / 2;
+    n_blocks
+        .checked_mul(pairs)
+        .and_then(|x| x.checked_mul(32))
+        .ok_or_else(|| invalid("OVFS payload size overflows usize"))
+}
+
+pub(crate) fn write_fastscan(
+    path: impl AsRef<Path>,
+    dim: usize,
+    n_vectors: usize,
+    packed_fs: &[u8],
+) -> io::Result<()> {
+    // Enforce the loaders' MAX_PAYLOAD cap *before* File::create so a rejected
+    // oversized write never truncates an existing file. Defense-in-depth; the
+    // round-trip guarantee is type-level (see module docs). Mirrors load_fastscan.
+    let payload_bytes = fastscan_payload_bytes(dim, n_vectors)?;
+    check_payload_bytes(payload_bytes)?;
+    assert_eq!(packed_fs.len(), payload_bytes);
+    let mut f = BufWriter::new(File::create(path)?);
+    f.write_all(OVFS_MAGIC)?;
+    f.write_all(&[VERSION])?;
+    f.write_all(&(dim as u32).to_le_bytes())?;
+    f.write_all(&(n_vectors as u32).to_le_bytes())?;
+    f.write_all(packed_fs)?;
+    f.flush()?;
+    Ok(())
+}
+
+pub(crate) fn load_fastscan(path: impl AsRef<Path>) -> io::Result<(usize, usize, Vec<u8>)> {
+    let file = File::open(path)?;
+    let file_len = file.metadata()?.len();
+    let mut f = BufReader::new(file);
+    let magic = read_magic(&mut f, "OVFS")?;
+    // OVFS is new in the ordvec format: there is no legacy TV* fastscan magic.
+    if &magic != OVFS_MAGIC {
+        return Err(invalid("not an OVFS (RankQuantFastscan) file: wrong magic"));
+    }
+    read_version(&mut f, "OVFS")?;
+    let dim = read_u32_le(&mut f, "OVFS", "dim")? as usize;
+    check_dim(dim)?;
+    // FastScan b=2 requires `dim % 4 == 0` (mirrors `RankQuantFastscan::new` /
+    // `RankQuant::new(dim, 2)`: constant composition, exact analytical norm).
+    // `dim % 4 == 0` subsumes the pair-encoding's `dim % 2 == 0`.
+    if !dim.is_multiple_of(4) {
+        return Err(invalid(format!(
+            "OVFS dim {dim} is not a multiple of 4 (b=2 constant composition)"
+        )));
+    }
+    let n_vectors = read_u32_le(&mut f, "OVFS", "n_vectors")? as usize;
+    check_n_vectors(n_vectors)?;
+    let payload_bytes = fastscan_payload_bytes(dim, n_vectors)?;
+    check_payload_bytes(payload_bytes)?;
+    check_payload_matches_file(&mut f, "OVFS", file_len, payload_bytes)?;
+    // The packed FastScan payload is opaque pre-encoded nibbles in the block-32
+    // transpose: any byte value is valid, so there is no per-row invariant to
+    // check beyond the exact payload length validated above.
+    let mut packed_fs = try_alloc_zeroed(payload_bytes)?;
+    f.read_exact(&mut packed_fs)?;
+    Ok((dim, n_vectors, packed_fs))
 }
 
 #[cfg(test)]

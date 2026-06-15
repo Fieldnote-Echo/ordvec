@@ -511,21 +511,22 @@ pub(crate) fn search_asymmetric_fastscan_b2(
 ///   cleanly with incremental extend (tail padding within blocks
 ///   would interleave with new docs). Subsequent `add()` calls panic;
 ///   construct a new index for incremental scenarios.
-/// - **No `swap_remove`, `write`, `load`** — the block-32 layout
-///   makes byte-exact updates non-trivial. v2 follow-up.
+/// - **No `swap_remove`** — the block-32 layout makes byte-exact in-place
+///   updates non-trivial (a v2 follow-up). Persistence *is* supported:
+///   [`write`](Self::write) / [`load`](Self::load) round-trip via the
+///   `.ovfs` format.
 ///
 /// # Concurrency
 ///
 /// `search` takes `&self`; safe to call from multiple threads
 /// concurrently.
 ///
-/// # Visibility
+/// # Positioning
 ///
-/// This type is re-exported `#[doc(hidden)]`: it is an optional scan
-/// path, not part of the headline API. Prefer
-/// [`RankQuant`](crate::RankQuant) unless you have
-/// measured FastScan to win on your workload.
-#[doc(hidden)]
+/// A stable, documented public type, but a **specialized** one: it is the
+/// minimum-latency b=2 scan path, not the headline retrieval API. Prefer
+/// [`RankQuant`](crate::RankQuant) / [`Bitmap`](crate::Bitmap) / the two-stage
+/// flow unless you have measured FastScan to win on your workload.
 pub struct RankQuantFastscan {
     dim: usize,
     n_vectors: usize,
@@ -639,5 +640,30 @@ impl RankQuantFastscan {
     /// includes per-block tail padding when `n_vectors % 32 != 0`).
     pub fn byte_size(&self) -> usize {
         self.packed_fs.len()
+    }
+
+    /// Persist this index to a `.ovfs` file (magic `OVFS`).
+    ///
+    /// The on-disk form is a 13-byte header (`OVFS` magic, version, `dim`,
+    /// `n_vectors`) followed by the opaque block-32 packed FastScan payload.
+    /// This is a new ordvec format with no turbovec-era counterpart. Round-trip
+    /// is a type-level guarantee: [`Self::load`] reconstructs the same
+    /// `(dim, n_vectors)` and packed buffer this writes.
+    pub fn write(&self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
+        crate::rank_io::write_fastscan(path, self.dim, self.n_vectors, &self.packed_fs)
+    }
+
+    /// Load a `.ovfs` FastScan index previously written by [`Self::write`].
+    ///
+    /// The loader validates the header and that the payload length is exactly
+    /// the block-32 size implied by `(dim, n_vectors)` (`dim % 4 == 0`, no
+    /// trailing bytes), so the returned index is consistent by construction.
+    pub fn load(path: impl AsRef<std::path::Path>) -> std::io::Result<Self> {
+        let (dim, n_vectors, packed_fs) = crate::rank_io::load_fastscan(path)?;
+        Ok(Self {
+            dim,
+            n_vectors,
+            packed_fs,
+        })
     }
 }
