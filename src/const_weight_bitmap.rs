@@ -345,13 +345,29 @@ impl BitmapNull {
             .sum()
     }
 
-    /// Exact upper-tail probability `P(overlap >= observed)` under the uniform
-    /// constant-weight null.
+    /// Upper-tail probability `P(overlap >= observed)` under the **idealized
+    /// uniform constant-weight null**, returned as the nearest `f64`.
     ///
-    /// Returns `tail_count(observed) / space_size` as an `f64`. This is the
-    /// fraction of all weight-`weight` bitmaps whose overlap with a fixed
-    /// weight-`weight` bitmap is at least `observed` — the exact hypergeometric
+    /// This is the fraction of all weight-`weight` bitmaps whose overlap with a
+    /// fixed weight-`weight` bitmap is at least `observed` — the hypergeometric
     /// upper tail at the given threshold.
+    ///
+    /// **This is an in-model finite null, not a real-corpus guarantee.** It
+    /// assumes bitmaps are drawn uniformly at random among all weight-`weight`
+    /// patterns. Real embeddings need not satisfy that assumption, so a small
+    /// tail probability is a *selectivity* (false-positive-rate) statement under
+    /// this idealized model — **not** corpus-calibrated evidence strength and not
+    /// proof that an observed overlap is meaningful on real data.
+    ///
+    /// The **exact** result is the rational `tail_count(observed) / space_size`,
+    /// both available as exact `u128` via [`Self::tail_count`] and
+    /// [`Self::space_size`]; callers needing exact reasoning should use those
+    /// directly. This method returns the closest `f64` to that rational (the
+    /// counts are gcd-reduced first, so the conversion is exact whenever the
+    /// reduced numerator and denominator fit in an `f64` mantissa). For very
+    /// large `C(dim, weight)` the true value may not be `f64`-representable —
+    /// e.g. a value just below `1.0` rounds to `1.0`, the nearest `f64` — which
+    /// is a representation limit, not an inexactness in the underlying counts.
     ///
     /// Returns `0.0` for `observed > weight` (impossible overlap) and `1.0`
     /// for `observed == 0` (all bitmaps overlap in `>= 0` positions).
@@ -371,11 +387,24 @@ impl BitmapNull {
     /// # }
     /// ```
     pub fn tail_probability(&self, observed: usize) -> f64 {
+        // Exact short-circuits — no division, no rounding.
+        if observed == 0 {
+            return 1.0;
+        }
+        if observed > self.weight {
+            return 0.0;
+        }
         let space = self.space_size();
         if space == 0 {
             return 0.0;
         }
-        self.tail_count(observed) as f64 / space as f64
+        let count = self.tail_count(observed);
+        // Reduce by the gcd so the `f64` conversion uses the smallest equivalent
+        // integers: when the reduced numerator and denominator both fit in an
+        // `f64` mantissa the ratio is then exactly representable / correctly
+        // rounded, avoiding a needless double-rounding of two large `u128`s.
+        let g = gcd(count, space);
+        (count / g) as f64 / (space / g) as f64
     }
 }
 
@@ -732,6 +761,30 @@ mod tests {
             );
             assert!(p <= prev, "tail_probability must be non-increasing");
             prev = p;
+        }
+    }
+
+    #[test]
+    fn tail_probability_matches_exact_gcd_reduced_ratio() {
+        // `tail_probability` must equal the nearest `f64` to the EXACT rational
+        // `tail_count / space_size` (the exact `u128` surface), gcd-reduced so
+        // two large counts are not needlessly double-rounded. `C(64, 32) ≈ 1.8e18`
+        // and `C(100, 50) ≈ 1e29` are far past `2^53` (yet still inside `u128`) —
+        // the regime where the naive `count as f64 / space as f64` cast rounds.
+        for &(dim, weight) in &[(10usize, 3usize), (16, 4), (64, 32), (100, 50)] {
+            let null = BitmapNull::new(dim, weight);
+            let space = null.space_size();
+            for observed in 0..=weight + 1 {
+                let count = null.tail_count(observed);
+                let g = gcd(count, space);
+                let expected = (count / g) as f64 / (space / g) as f64;
+                assert_eq!(
+                    null.tail_probability(observed),
+                    expected,
+                    "dim={dim} weight={weight} observed={observed}"
+                );
+                assert!((0.0..=1.0).contains(&null.tail_probability(observed)));
+            }
         }
     }
 }
