@@ -113,6 +113,8 @@ dependencies = [
  "matrixmultiply",
  "ordvec",
  "rayon",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]

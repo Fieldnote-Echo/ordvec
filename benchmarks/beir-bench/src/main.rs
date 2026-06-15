@@ -213,72 +213,18 @@ fn load_npy_f32(path: &str) -> (Vec<f32>, usize, usize) {
 
 fn load_json_string_array(path: &str) -> Vec<String> {
     let text = std::fs::read_to_string(path).unwrap_or_else(|e| panic!("read {path}: {e}"));
-    let mut out = Vec::new();
-    let mut in_str = false;
-    let mut cur = String::new();
-    let mut chars = text.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '"' {
-            if in_str {
-                out.push(cur.clone());
-                cur.clear();
-                in_str = false;
-            } else {
-                in_str = true;
-            }
-        } else if in_str {
-            if c == '\\' {
-                if let Some(next) = chars.next() {
-                    match next {
-                        '"' => cur.push('"'),
-                        '\\' => cur.push('\\'),
-                        'n' => cur.push('\n'),
-                        't' => cur.push('\t'),
-                        other => {
-                            cur.push('\\');
-                            cur.push(other);
-                        }
-                    }
-                }
-            } else {
-                cur.push(c);
-            }
-        }
-    }
-    out
+    serde_json::from_str(&text).unwrap_or_else(|e| panic!("parse json string array {path}: {e}"))
 }
 
-/// sha256 of a file via system sha256sum / shasum / openssl. Panics with a clear
-/// reason; never emits a non-SHA value that merely looks like one.
+/// SHA-256 of a file, pure Rust (no shelling out — portable, incl. Windows /
+/// minimal containers). Hex-encoded; matches the Python `hashlib` digest.
 fn sha256_file(path: &str) -> String {
-    if !std::path::Path::new(path).is_file() {
-        panic!("cannot compute SHA-256: file does not exist: {path}");
-    }
-    let mut tool_ran = false;
-    for (cmd, args) in &[
-        ("sha256sum", vec![path]),
-        ("shasum", vec!["-a", "256", path]),
-        ("openssl", vec!["dgst", "-sha256", path]),
-    ] {
-        if let Ok(out) = std::process::Command::new(cmd).args(args).output() {
-            tool_ran = true;
-            if out.status.success() {
-                let s = String::from_utf8_lossy(&out.stdout);
-                for token in s.split_whitespace() {
-                    if token.len() == 64 && token.chars().all(|c| c.is_ascii_hexdigit()) {
-                        return token.to_string();
-                    }
-                }
-            }
-        }
-    }
-    if tool_ran {
-        panic!("a SHA-256 tool ran but produced no digest for {path}");
-    }
-    panic!(
-        "no SHA-256 tool available (tried sha256sum / shasum -a 256 / openssl) — \
-         cannot compute the encoder-manifest digest for {path}"
-    );
+    use sha2::{Digest, Sha256};
+    let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {path} for sha256: {e}"));
+    Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
 }
 
 fn rustc_version() -> String {
@@ -383,47 +329,37 @@ fn write_topk_jsonl<W: Write>(
     let n_corpus = corpus_ids.len();
     for qi in 0..nq {
         let row_indices = &indices[qi * k..(qi + 1) * k];
-        let mut doc_idxs_str = String::from("[");
-        let mut doc_ids_str = String::from("[");
-        let mut scores_str = String::from("[");
-        let mut first = true;
+        let mut doc_idxs: Vec<u64> = Vec::new();
+        let mut doc_ids: Vec<&str> = Vec::new();
+        let mut row_scores: Vec<f64> = Vec::new();
         for (j, &di) in row_indices.iter().enumerate() {
             if di < 0 {
-                break;
+                break; // sentinel marks the end of this query's results
             }
             let di_usize = di as usize;
-            if !first {
-                doc_idxs_str.push(',');
-                doc_ids_str.push(',');
-                scores_str.push(',');
-            }
-            first = false;
-            doc_idxs_str.push_str(&di_usize.to_string());
-            let doc_id = if di_usize < n_corpus {
+            doc_idxs.push(di_usize as u64);
+            doc_ids.push(if di_usize < n_corpus {
                 corpus_ids[di_usize].as_str()
             } else {
                 ""
-            };
-            doc_ids_str.push('"');
-            doc_ids_str.push_str(doc_id);
-            doc_ids_str.push('"');
+            });
             let sc = scores.get(qi * k + j).copied().unwrap_or(0.0);
-            if sc.is_finite() {
-                scores_str.push_str(&sc.to_string());
-            } else {
-                scores_str.push_str("0.0");
-            }
+            row_scores.push(if sc.is_finite() { sc as f64 } else { 0.0 });
         }
-        doc_idxs_str.push(']');
-        doc_ids_str.push(']');
-        scores_str.push(']');
-
-        writeln!(
-            writer,
-            r#"{{"dataset":"{dataset}","split":"{split}","method":"{method}","qid_idx":{qi},"qid":"{qid}","k":{k},"doc_idxs":{doc_idxs_str},"doc_ids":{doc_ids_str},"scores":{scores_str}}}"#,
-            qid = query_ids[qi],
-        )
-        .expect("write topk jsonl");
+        // serde_json guarantees valid JSON (escapes quotes/backslashes/unicode in
+        // doc/query IDs), so downstream `json.loads` never trips.
+        let row = serde_json::json!({
+            "dataset": dataset,
+            "split": split,
+            "method": method,
+            "qid_idx": qi,
+            "qid": query_ids[qi],
+            "k": k,
+            "doc_idxs": doc_idxs,
+            "doc_ids": doc_ids,
+            "scores": row_scores,
+        });
+        writeln!(writer, "{row}").expect("write topk jsonl");
     }
 }
 
@@ -452,37 +388,31 @@ struct Record<'a> {
 }
 
 fn write_record_json<W: Write + ?Sized>(w: &mut W, r: &Record) {
-    let simd_arr: String = {
-        let parts: Vec<String> = r.simd.iter().map(|s| format!("\"{s}\"")).collect();
-        format!("[{}]", parts.join(","))
-    };
-    writeln!(
-        w,
-        r#"{{"dataset":"{ds}","split":"{sp}","method":"{m}","dim":{dim},"n_docs":{nd},"n_queries":{nq},"top_k":{tk},"threads":{th},"batch":{b},"candidates":{c},"bytes_per_vector":{bpv},"index_total_mib":{imib:.3},"build_seconds":{bs:.4},"query_latency_ms_p50":{p50:.5},"query_latency_ms_p95":{p95:.5},"query_latency_ms_p99":{p99:.5},"queries_per_second":{qps:.2},"cpu_arch":"{arch}","simd_detected":{simd},"rustc":"{rustc}","crate_version":"{cv}","encoder_manifest_sha256":"{sha}"}}"#,
-        ds = r.dataset,
-        sp = r.split,
-        m = r.method,
-        dim = r.dim,
-        nd = r.n_docs,
-        nq = r.n_queries,
-        tk = r.top_k,
-        th = r.threads,
-        b = r.batch,
-        c = r.candidates,
-        bpv = r.bytes_per_vector,
-        imib = r.index_total_mib,
-        bs = r.build_seconds,
-        p50 = r.p50_ms,
-        p95 = r.p95_ms,
-        p99 = r.p99_ms,
-        qps = r.qps,
-        arch = std::env::consts::ARCH,
-        simd = simd_arr,
-        rustc = rustc_version(),
-        cv = env!("CARGO_PKG_VERSION"),
-        sha = r.encoder_sha,
-    )
-    .expect("write record json");
+    let rec = serde_json::json!({
+        "dataset": r.dataset,
+        "split": r.split,
+        "method": r.method,
+        "dim": r.dim,
+        "n_docs": r.n_docs,
+        "n_queries": r.n_queries,
+        "top_k": r.top_k,
+        "threads": r.threads,
+        "batch": r.batch,
+        "candidates": r.candidates,
+        "bytes_per_vector": r.bytes_per_vector,
+        "index_total_mib": r.index_total_mib,
+        "build_seconds": r.build_seconds,
+        "query_latency_ms_p50": r.p50_ms,
+        "query_latency_ms_p95": r.p95_ms,
+        "query_latency_ms_p99": r.p99_ms,
+        "queries_per_second": r.qps,
+        "cpu_arch": std::env::consts::ARCH,
+        "simd_detected": r.simd,
+        "rustc": rustc_version(),
+        "crate_version": env!("CARGO_PKG_VERSION"),
+        "encoder_manifest_sha256": r.encoder_sha,
+    });
+    writeln!(w, "{rec}").expect("write record json");
 }
 
 // ---------------------------------------------------------------------------
@@ -633,7 +563,9 @@ fn local_topk(row: &[f32], id_offset: usize, top_k: usize) -> Vec<(f32, i64)> {
         .map(|(j, &s)| (s, (id_offset + j) as i64))
         .collect();
     let k = top_k.min(scored.len());
-    if k < scored.len() {
+    // `k > 0` guards the `k - 1` index (top_k is asserted >= 1 at the CLI, but
+    // keep this defensive so a zero can never underflow to usize::MAX here).
+    if k > 0 && k < scored.len() {
         scored.select_nth_unstable_by(k - 1, |a, b| b.0.total_cmp(&a.0));
         scored.truncate(k);
     }

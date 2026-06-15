@@ -287,10 +287,11 @@ def paired_bootstrap(
     diff = m - b
     observed_delta = float(diff.mean())
 
-    boot = np.empty(n_iters, dtype=np.float64)
-    for i in range(n_iters):
-        idx = rng.integers(0, n, size=n)
-        boot[i] = diff[idx].mean()
+    # Vectorized paired bootstrap: draw all (n_iters x n) resample indices at once
+    # and reduce along the query axis — same paired resampling, but the loop runs
+    # in NumPy's C internals instead of Python.
+    idx = rng.integers(0, n, size=(n_iters, n))
+    boot = diff[idx].mean(axis=1)
 
     ci_low = float(np.percentile(boot, 2.5))
     ci_high = float(np.percentile(boot, 97.5))

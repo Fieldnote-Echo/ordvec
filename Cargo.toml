@@ -21,7 +21,11 @@ exclude = [
     ".github/",
     ".gitignore",
     ".playwright-mcp/",
-    "benchmarks/",
+    # The BEIR harness + figures + its bench crate are dev tooling — not shipped
+    # in the published crate. (benchmarks/rank_modes_results.txt stays IN the
+    # package: the README links it and the release-publish invariant requires it.)
+    "benchmarks/beir/",
+    "benchmarks/beir-bench/",
     "CLAUDE.md",
     "CODE_OF_CONDUCT.md",
     "CONTRIBUTING.md",

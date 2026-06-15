@@ -17,6 +17,12 @@ nearest-neighbour search over high-dimensional embeddings.
 
 ## Benchmark at a glance
 
+> **ordvec matches dense retrieval quality within BEIR qrel noise at 8–16× smaller
+> vector storage — with no training and no graph build — and sub-millisecond
+> single-query retrieval on 171K Harrier embeddings. A threaded HNSW graph still
+> wins highly-parallel batched serving; ordvec wins the lightweight
+> compressed-substrate lane.**
+
 On **trec-covid** (171,332 documents, the public [BEIR](https://github.com/beir-cellar/beir)
 benchmark) with **Harrier-Q8** 1024-d embeddings, ordvec's two-stage retrieval
 keeps a near-flat per-query cost as the corpus grows, while exact brute-force
@@ -38,11 +44,15 @@ keeps a near-flat per-query cost as the corpus grows, while exact brute-force
   make benchmark-beir       # download BEIR, embed, run all methods, render graphics
   ```
 
-  Every number and figure above is regenerated from public BEIR data by that
-  command — nothing here is hand-entered. Latency is measured for all methods in
-  **one Rust process** (no Python/FFI in the hot path); see the
-  [Benchmarks](#benchmarks) section for the single-query, batched-throughput, and
-  threaded views and their caveats.
+  The figures and result tables in this README were produced by that command on
+  public BEIR data: the harness writes the figures and the nDCG/timing summaries,
+  the README tables transcribe those outputs, and you can regenerate or verify
+  every number yourself (exact latencies vary with hardware and batch size). The
+  default run reproduces **scifact + trec-covid**; the harness also supports
+  `nfcorpus` and `fiqa`. Latency for every method is measured in **one Rust
+  process** (no Python/FFI in the hot path); see the [Benchmarks](#benchmarks)
+  section for the single-query, batched-throughput, and threaded views and their
+  caveats.
 
 ## What's different
 
@@ -273,7 +283,7 @@ candidate slices passed to `Search` until the call returns.
 ### BEIR retrieval (public datasets, reproducible)
 
 A fully reproducible harness over standard [BEIR](https://github.com/beir-cellar/beir)
-datasets lives in [`benchmarks/beir/`](benchmarks/beir). It embeds the corpus
+datasets lives in [`benchmarks/beir/`](https://github.com/Fieldnote-Echo/ordvec/tree/main/benchmarks/beir). It embeds the corpus
 with **Harrier-Q8** (GGUF `Q8_0` via `llama-cpp-python`, CUDA), then measures
 ordvec's methods against two references **in a single Rust process** so the
 latency comparison is genuinely apples-to-apples — same machine, batch, and
@@ -365,8 +375,6 @@ exact GEMM is a strong baseline and HNSW threads very well. The durable wins are
 corpus grows**. `flat` is a comparison reference, not ground truth; nDCG@10 is
 the qrel-based metric. Numbers vary with encoder, dataset, hardware, and batch —
 the point is that you can regenerate all of them with `make benchmark-beir`.
-
-### Synthetic stress test
 
 ### Synthetic stress test
 
