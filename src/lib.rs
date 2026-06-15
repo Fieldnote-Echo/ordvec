@@ -66,6 +66,9 @@
 use std::fmt;
 
 mod bitmap;
+/// Index-free, fixed-composition ordinal bucket codes (issue #220).
+#[cfg(feature = "experimental")]
+pub mod bucket_code;
 #[cfg(feature = "experimental")]
 mod contingency;
 mod fastscan;
@@ -135,6 +138,14 @@ pub use multi_bucket::MultiBucketBitmap;
 // `MultiBucketBitmap` is the unstable counterpart — see the note above.
 #[cfg(feature = "experimental")]
 pub use contingency::{Contingency, Projection};
+
+// Index-free, fixed-composition ordinal bucket codes (issue #220). The reusable
+// bucket-code surface — derive/validate per-coordinate bucket codes from a
+// vector or a rank permutation with no retrieval index — behind the
+// `experimental` feature. Whether it graduates to the stable surface is a
+// deliberate later decision.
+#[cfg(feature = "experimental")]
+pub use bucket_code::{BucketCode, CompositionSpec, CompositionViolation, RankQuantSpec};
 
 // `RankQuantFastscan` is an optional FastScan b=2 scan path. It is
 // re-exported `#[doc(hidden)]` at the crate root — reachable as
