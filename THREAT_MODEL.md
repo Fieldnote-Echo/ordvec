@@ -1,6 +1,6 @@
 # Threat Model — `ordvec`
 
-> **Status:** v0.5.0 (pre-1.0), 2026-06-13. This is the maintained threat model
+> **Status:** v0.5.0 (pre-1.0), 2026-06-15. This is the maintained threat model
 > for the `ordvec` Rust crate, C ABI, Go wrapper, PyO3/maturin Python bindings,
 > and the `ordvec-manifest` sidecar verifier. It is reviewed when the
 > attack surface changes (new persistence formats, new `unsafe` kernels, new
@@ -66,7 +66,7 @@ absence of a second maintainer is itself a tracked supply-chain residual
 
 | Layer | Components | Trust boundary |
 |---|---|---|
-| **Deserialization** | `rank_io.rs` — `.ovr` / `.ovrq` / `.ovbm` / `.ovsb` loaders (also accept the legacy `.tvr` / `.tvrq` / `.tvbm` / `.tvsb` magics) | Untrusted filesystem / network byte stream |
+| **Deserialization** | `rank_io.rs` — `.ovr` / `.ovrq` / `.ovbm` / `.ovsb` / `.ovfs` loaders (`.ovfs`/`OVFS` is the FastScan format and has no legacy magic; the other four also accept the legacy `.tvr` / `.tvrq` / `.tvbm` / `.tvsb` magics) | Untrusted filesystem / network byte stream |
 | **Manifest verification** | `ordvec-manifest` — JSON sidecar verifier | Manifest + index + optional row-map files before load |
 | **Compute kernels** | `fastscan.rs`, `quant_kernels.rs`, `bitmap.rs`, `sign_bitmap.rs` | Trust established after format validation |
 | **Index API** | `rank.rs`, `quant.rs`, `bitmap.rs`, `sign_bitmap.rs` | Caller-controlled query embeddings |
@@ -75,13 +75,14 @@ absence of a second maintainer is itself a tracked supply-chain residual
 | **Python FFI** | `ordvec-python` (PyO3 / maturin) | Python ↔ Rust boundary; NumPy buffers |
 | **CI / supply chain** | GitHub Actions workflows; `Cargo.lock`; crates.io + PyPI | GitHub OIDC, crates.io, PyPI trust chains |
 
-The `fuzz/` directory holds **eight** cargo-fuzz targets: `load_rank`,
-`load_rankquant`, `load_bitmap`, `load_sign_bitmap` (deserialization);
-`roundtrip_rankquant` (write→load round-trip); `search_rankquant` (the
-single-rate ingest + asymmetric-search compute path); `fastscan_b2` (the
-FastScan b=2 block-32 kernel — the one `unsafe`-heavy scan path the others do
-not reach); and `signbitmap_rankquant_twostage` (sign candidate generation
-followed by RankQuant subset reranking).
+The `fuzz/` directory holds **nine** cargo-fuzz targets: `load_rank`,
+`load_rankquant`, `load_bitmap`, `load_sign_bitmap`, `load_fastscan`
+(deserialization — the last drives the `.ovfs`/`OVFS` FastScan loader via
+`RankQuantFastscan::load`); `roundtrip_rankquant` (write→load round-trip);
+`search_rankquant` (the single-rate ingest + asymmetric-search compute path);
+`fastscan_b2` (the FastScan b=2 block-32 kernel — the one `unsafe`-heavy scan
+path the others do not reach); and `signbitmap_rankquant_twostage` (sign
+candidate generation followed by RankQuant subset reranking).
 
 ### 1.2 Deployment contexts (for integrators)
 
@@ -125,14 +126,15 @@ followed by RankQuant subset reranking).
   persistence API is the index types' `write()` / `load()`, making the
   write→load round-trip a type-level guarantee.
 
-The four loaders are covered by cargo-fuzz targets (the `load_*` targets).
+The five loaders are covered by cargo-fuzz targets (the `load_*` targets,
+including `load_fastscan` for the `.ovfs` FastScan format).
 
 ### 2.2 Index-file risk classes
 
 **THREAT-DESER-001 (library-owned, P4): Malformed index file.**
 The loader must reject corrupt/invalid files without panic, OOM, or
 trailing-data acceptance. The current implementation satisfies this for all
-four formats. *Residual:* `file.metadata()?.len()` is sampled at open time;
+five formats. *Residual:* `file.metadata()?.len()` is sampled at open time;
 on NFS/FUSE mounts with concurrent writers a TOCTOU window exists between
 `metadata()` and the reads. On writable shared mounts the practical outcome is
 a read error or `InvalidData`, not an exploit. *Likelihood:* Very Low.
@@ -433,7 +435,7 @@ knowledge of quantization parameters and the document distribution.
 
 ## 8. Fuzzing coverage (THREAT-FUZZ)
 
-Eight targets cover the four loaders, the write→load round-trip, the
+Nine targets cover the five loaders, the write→load round-trip, the
 single-rate compute path, the FastScan kernel, and the composed
 SignBitmap→RankQuant retrieval path.
 
@@ -448,7 +450,7 @@ it exercises the AVX-512 kernel.
 regression.** A `fuzz.yml` workflow now runs a bounded smoke on every pull
 request and push to `main` (`-max_total_time=60` over `load_rank`,
 `load_rankquant`, `fastscan_b2`, and `signbitmap_rankquant_twostage`) plus a
-weekly full sweep (`-max_total_time=300` over all eight targets), so a
+weekly full sweep (`-max_total_time=300` over all nine targets), so a
 regression that
 reintroduces a loader panic / OOM, breaks the write→load round-trip, or
 destabilises the FastScan kernel or composed sign→RankQuant path surfaces in CI

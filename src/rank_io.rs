@@ -44,7 +44,9 @@
 //!
 //! The supported persistence API is the index types' `write()` / `load()`
 //! methods: [`Rank`](crate::Rank) / [`RankQuant`](crate::RankQuant) /
-//! [`Bitmap`](crate::Bitmap) / [`SignBitmap`](crate::SignBitmap). The
+//! [`Bitmap`](crate::Bitmap) / [`SignBitmap`](crate::SignBitmap) /
+//! [`RankQuantFastscan`](crate::RankQuantFastscan) (the last via the `.ovfs`
+//! format). The
 //! `write_*` / `load_*` format helpers in this module are **crate-internal**
 //! (`pub(crate)`); only the `MAX_*` capacity constants are public.
 //!

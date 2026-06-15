@@ -61,9 +61,10 @@ documented minor release removes them.
 The `experimental` feature is a default-off research surface. Today it exposes
 `MultiBucketBitmap`; it is not patch-stable before 1.0.
 
-`#[doc(hidden)]` exports such as `RankQuantFastscan` and
+`RankQuantFastscan` is a stable, public (but specialized) type, covered by the
+normal pre-1.0 compatibility policy above. `#[doc(hidden)]` exports such as
 `search_asymmetric_byte_lut` are reachable for internal benchmarks and parity
-tests, but they are not part of the stable default API.
+tests, but are not part of the stable default API.
 
 New feature flags must declare their stability class before merging:
 

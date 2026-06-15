@@ -189,8 +189,8 @@ double free are undefined behavior.
 
 ## V1 Exclusions
 
-ABI v1 intentionally excludes `Rank`, `SignBitmap`, external IDs, ID maps,
-builders, mutating index APIs, logging callbacks, custom allocators, async
-search, batched search, richer measured timing breakdowns, and release
-packaging. Those can be added in later ABI versions without changing the v1
-struct-size rule.
+ABI v1 intentionally excludes `Rank`, `SignBitmap`, `RankQuantFastscan`
+(the `.ovfs` FastScan path), external IDs, ID maps, builders, mutating index
+APIs, logging callbacks, custom allocators, async search, batched search,
+richer measured timing breakdowns, and release packaging. Those can be added in
+later ABI versions without changing the v1 struct-size rule.

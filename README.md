@@ -12,8 +12,9 @@
 
 Training-free ordinal & sign quantization for vector retrieval.
 
-`ordvec` is a small, dependency-light Rust crate for compressed
-nearest-neighbour search over high-dimensional embeddings.
+`ordvec` is a small, pure-Rust crate for compressed nearest-neighbour search
+that quantizes the **ordinal (rank) and sign structure** of an embedding —
+no codebook, no learned rotation, no graph to build.
 
 ## Benchmark at a glance
 
@@ -56,10 +57,12 @@ keeps a near-flat per-query cost as the corpus grows, while exact brute-force
 
 ## What's different
 
-Compressed-retrieval libraries usually either **fit a codebook to your
-data** (product / scalar quantization) or **wrap vectors in a graph**
-(HNSW). ordvec does neither — it quantizes the *ordinal* structure of each
-vector on its own:
+Compressed-retrieval paths almost all carry a **fit step**: product
+quantization fits a k-means codebook, OPQ adds a learned rotation,
+scalar / binary quantizers calibrate to the data distribution, graph indexes
+(HNSW) build a navigable graph, and Matryoshka needs a model trained with its
+loss. ordvec fits **none** of them — it quantizes the *ordinal and sign*
+structure of each vector on its own:
 
 - **Training-free, data-oblivious.** No codebook, no learned rotation, no
   fit step. Encoding is a per-vector rank (or sign) transform — index the
@@ -78,7 +81,10 @@ vector on its own:
   when `dim % 256 == 0` — not a broad retrieval mode.)
 - **Two-stage retrieval, built in.** A cheap bitmap / sign-popcount
   prefilter feeds an exact rerank — the coarse→fine pipeline ships as
-  library primitives.
+  library primitives. The coarse-scan→exact-rerank pattern, and the
+  `RankQuantFastscan` block-32 4-bit LUT path, follow the FAISS FastScan and
+  binary-quantization-plus-rescore lineage; ordvec ships them
+  batteries-included and dependency-free, not as new techniques.
 
 ordvec is a compressed **flat-scan** substrate (optionally two-stage): small
 codes scored by fast SIMD — AVX-512/AVX2 runtime-dispatched on x86_64, baseline
@@ -100,11 +106,13 @@ large-scale serving rather than competing with one.
 
 Two further paths, for callers who need them:
 
-- **`RankQuantFastscan`** *(`#[doc(hidden)]` — reachable as
-  `ordvec::RankQuantFastscan`, but the API is not yet stable)* — an optional
-  b=2 FastScan kernel (block-32 PQ-LUT) for absolute-minimum scan latency, at
-  2× the RankQuant b=2 footprint (`dim/2` bytes/doc). Surfaced here so
-  latency-critical callers know it exists.
+- **`RankQuantFastscan`** — a stable, documented *but specialized* public
+  type: an optional b=2 FastScan kernel (block-32 nibble/PQ-LUT, AVX-512 → AVX2
+  → scalar dispatch) for absolute-minimum stage-1 scan latency, at 2× the
+  RankQuant b=2 footprint (`dim/2` bytes/doc) and 8-bit LUT scoring noise. It
+  persists to `.ovfs` (magic `OVFS`). Reach for it only when scan latency at
+  b=2 is the binding constraint; the headline retrieval surface is still
+  `RankQuant` / `Bitmap` / two-stage.
 - **`MultiBucketBitmap`** *(behind `--features experimental`)* — the
   multi-bucket bilinear-overlap probe behind the research-side decomposition;
   an algebraic scaffold, not the top-bucket theorem surface or a production
@@ -291,11 +299,11 @@ thread count, no Python/FFI in the hot path:
 
 - **`flat`** — exact inner-product brute force (identical retrieval to FAISS
   `IndexFlatIP`), a pure-Rust SIMD GEMM. *Baseline, not ground truth.*
-- **`hnsw`** — pure-Rust HNSW (`hnsw_rs`, M=32, ef=128) — the portable
-  stand-in for the C++ hnswlib.
+- **`hnsw`** — pure-Rust HNSW (`hnsw_rs`, M=32, ef_construction=200,
+  ef_search=128) — the portable stand-in for the C++ hnswlib.
 
 Reproduce end-to-end (downloads the data, embeds, runs every method, renders the
-figures) — nothing below is hand-entered:
+figures, and emits the summary tables transcribed below):
 
 ```sh
 make bench-beir-setup      # Python deps + CUDA llama-cpp-python
@@ -426,8 +434,8 @@ clean-checkout kernel sanity check.
 
 ## Security: index-file trust
 
-The on-disk formats (`.ovr` / `.ovrq` / `.ovbm` / `.ovsb`; legacy `.tvr` /
-`.tvrq` / `.tvbm` / `.tvsb` files still load) carry **no built-in
+The on-disk formats (`.ovr` / `.ovrq` / `.ovbm` / `.ovsb` / `.ovfs`; legacy
+`.tvr` / `.tvrq` / `.tvbm` / `.tvsb` files still load) carry **no built-in
 checksum, MAC, or signature — by design.** The loaders validate *structure*
 (magic, version, bounds, exact-length payload) but not *origin*: a
 structurally valid file can still be untrusted. If an index file crosses a

@@ -67,7 +67,7 @@ the public hit order still follows the global ordering rule above.
 
 ## FastScan
 
-`RankQuantFastscan` is a hidden, optional b=2 pre-ranker. It is deterministic
+`RankQuantFastscan` is a public, specialized, optional b=2 pre-ranker. It is deterministic
 for a fixed index, query, and backend dispatch, and its scalar and AVX-512
 FastScan kernels operate on the same quantized LUT inputs. It is not
 score-equivalent to exact `RankQuant::search_asymmetric`: the global 8-bit LUT

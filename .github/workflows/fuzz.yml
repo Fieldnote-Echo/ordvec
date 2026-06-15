@@ -1,6 +1,6 @@
 name: fuzz
 
-# Bounded cargo-fuzz smoke. The eight targets in fuzz/ are normally exercised
+# Bounded cargo-fuzz smoke. The nine targets in fuzz/ are normally exercised
 # in manual campaigns; this adds CI cadence so a regression that reintroduces a
 # loader panic / OOM, breaks the write->load round-trip, or destabilises the
 # FastScan or two-stage retrieval kernels surface in CI rather than only at
@@ -10,7 +10,7 @@ name: fuzz
 #   * pull_request / push(main): a SHORT smoke (60s/target) over the
 #     highest-value targets — fast enough to run on every change.
 #   * schedule (weekly) / workflow_dispatch: a LONGER sweep (300s/target)
-#     across ALL eight targets.
+#     across ALL nine targets.
 #
 # This runs UNATTENDED on a cron schedule, so every third-party action is
 # SHA-pinned, cargo-fuzz is installed with its bundled lockfile on a pinned
@@ -74,7 +74,7 @@ jobs:
           TARGET: ${{ matrix.target }}
         run: cargo "+${FUZZ_NIGHTLY}" fuzz run "$TARGET" -- -max_total_time=60 -rss_limit_mb=4096
 
-  # Weekly full sweep over all eight targets at a larger time budget.
+  # Weekly full sweep over all nine targets at a larger time budget.
   weekly:
     name: fuzz weekly (300s)
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -88,6 +88,7 @@ jobs:
           - load_rankquant
           - load_bitmap
           - load_sign_bitmap
+          - load_fastscan
           - roundtrip_rankquant
           - search_rankquant
           - fastscan_b2

@@ -15,7 +15,9 @@ methods this mirrors the headline Rust retrieval API. Rust-only metadata
 probing and manifest-verification helpers remain available through the Rust
 crates and the ``ordvec-manifest`` CLI; the low-level ``rank_io`` read/write
 functions are reached through the classes' ``write()`` / ``load()`` methods
-rather than exposed as standalone free functions.
+rather than exposed as standalone free functions. The specialized
+``RankQuantFastscan`` b=2 fast path (and its ``.ovfs`` persistence) is a
+Rust-only type and is intentionally not exposed in this binding.
 
 ``Bitmap`` exposes the constant-weight top-bucket overlap statistic formalized
 in the companion ``ordvec-formalization`` Lean repo: under explicit finite
