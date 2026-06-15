@@ -1,0 +1,12 @@
+beir
+numpy
+scipy
+sentence-transformers
+torch
+transformers
+faiss-cpu
+hnswlib
+tqdm
+requests
+pandas
+tabulate
