@@ -16,7 +16,7 @@ Training-free ordinal & sign quantization for vector retrieval.
 that quantizes the **ordinal (rank) and sign structure** of an embedding —
 no codebook, no learned rotation, no graph to build.
 
-## What is ordinal retrieval
+## What is ordinal retrieval?
 
 Ordinal retrieval is a retrieval family where the index operates on order/sign
 quotients of embedding coordinates rather than metric magnitudes, with
