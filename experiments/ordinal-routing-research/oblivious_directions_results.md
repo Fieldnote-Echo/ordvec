@@ -246,6 +246,61 @@ re-embed nomic@1100 on the SAME 57.6k fiqa docs to measure the shift directly
 documents at every chunk length at once → a *mixture* of geometries, not one — so
 chunk-length heterogeneity is itself a lake pathology (folds into Path B).
 
+## Phase B — the messy multi-cone "lake" (deployment robustness)
+
+Built a synthetic enterprise lake: union of 3 nomic-embedded domains (fiqa 57.6k +
+nq 74.1k + quora 150k = **281,729 docs**, 3,000 queries spanning all cones), with
+optional templated near-duplicate hub injection. Two pre-registered predictions
+about lake geometry — **both FALSIFIED** by the validated probes (the payoff of the
+negative-verification discipline: locked thresholds caught my wrong intuitions):
+
+- **Predicted: union of cones → higher effective ID.** WRONG — union ID = **8.2**
+  (vs ~24 per-domain). Far-apart domain clusters read to TwoNN as a few discrete
+  blobs = *lower* intrinsic dim. Cones add separation, not dimensions. A
+  multi-domain lake is **lower-ID and more clustered**, not higher-ID. (This also
+  voids Phase B's Question B — there is no ID rise to revive oblivious structure.)
+- **Predicted: no single removable mean (global centering breaks).** WRONG —
+  global centering still collapses cone_base to the uniform null (B=4: 11.2→3.25 ≈
+  textbook 3.0), well under the pre-registered 0.30 "insufficient" bar. The 3
+  domains share enough common direction that ONE global mean still de-hubs them.
+  Global centering **holds** on the multi-cone union.
+
+Net: the "messy lake = higher-ID, locally-coned, needs per-cluster centering"
+intuition is wrong on both counts. A multi-domain union is lower-ID and globally
+centerable.
+
+**Question C — templated-hub robustness (the dominant real-lake pathology).**
+Inject near-duplicate clusters (1 base vec + tiny noise) at rising prevalence;
+measure raw RankQuant b=4 R@10 vs FP32 cosine on the 3000-query lake set:
+
+| hub prevalence | b4 R@10 | Δ from clean |
+|----------------|---------|--------------|
+| 0%  | 0.8429 | — |
+| 5%  | 0.8408 | −0.0021 |
+| 10% | 0.8420 | −0.0009 |
+| 15% | 0.8421 | −0.0008 |
+
+Pre-registered "graceful if drop < 0.10 through 15%." Actual: **−0.002, flat to
+noise — essentially immune.** Mechanism: the fixed-mass rank code has no global
+frequency/IDF term for a hub to poison; injected boilerplate is far from real
+queries in rank space and never enters the top-k. Training-free + data-oblivious
+is *exactly* the property that confers hub-robustness (a learned codebook or
+IDF-weighted scheme would be corrupted by hub prevalence; ordvec is not).
+
+## Phase B verdict — ordvec is robust on multi-cone lake geometry
+
+All three pre-registered lake fears were unfounded: a multi-domain union is
+**lower-ID** (8.2 vs ~24/domain), **still globally centerable**, and **immune to
+templated hubs** (−0.002 R@10 through 15%). b=4 raw holds R@10 ≈ 0.84 throughout.
+The deployment-relevant conclusion: ordvec's training-free encoding does NOT
+degrade on multi-cone / hub-heavy data — if anything the geometry is easier.
+
+CAVEAT (honest scope): this is a synthetic union of 3 *curated* corpora. It models
+multi-cone structure + templated hubs, but NOT the OCR-garbage / mixed-language /
+extreme-length heterogeneity of a true S3 dump (uncapturable from clean
+embeddings). Claim established: "multi-domain union is benign." Claim NOT
+established: "raw dirty S3 sludge is benign" — that needs actual dirty data.
+
 ## Reproduce
 ```
 # embed real corpora via ollama nomic-embed-text -> .npy (see REAL_CORPUS_RUNBOOK.md)
@@ -253,4 +308,5 @@ cargo run --release --example uniformity_lemma    -- --corpus-npy CORPUS.npy
 cargo run --release --example overlap_decomp      -- --corpus-npy CORPUS.npy --queries-npy Q.npy
 cargo run --release --example centering_recall     -- --corpus-npy CORPUS.npy --queries-npy Q.npy
 cargo run --release --example subspace_directions  -- --corpus-npy CORPUS.npy --queries-npy Q.npy --kdim 13
+# Phase B lake: python make_lake.py --parts fiqa_corpus.npy nq_corpus.npy quora_corpus.npy --out lake.npy [--hub-frac 0.1]
 ```
