@@ -37,6 +37,7 @@ tiered below by **what survived scrutiny**. Read the tiers, not every doc.
 | [crt_seam_oracle_results.md](crt_seam_oracle_results.md) | CRT vernier seam theorem — exhaustive finite proof: lcm spacing, one coincidence/period, capped density `∏min(2t+1,m_i)/m_i`. Lean 4 formalization lives in the companion repo: [ordvec-formalization#17](https://github.com/Fieldnote-Echo/ordvec-formalization/pull/17) (open PR, `sorry`-free). |
 | [shard_recall_results.md](shard_recall_results.md) | Controlled ablation (post RNG-desync fix): random phase offsets add nothing vs aligned grids across R random directions. |
 | [oblivious_directions_results.md](oblivious_directions_results.md) | **The directions arc (round 2).** Data-oblivious low-discrepancy directions (golden-angle / Sobol / Kronecker) do NOT beat iid-random for training-free routing — across 5 encoders (nomic, bge-m3, bge-large, snowflake-arctic-v2, harrier-oss) at real intrinsic dim 18–24. CLASS-DEAD, pre-registered, replicated (the one mid-ladder flicker failed to replicate). Centering removes the cone but fails at b=4 (penalty grows with capacity). One robust positive: data-aligned (PCA) directions lead at higher ID — the lever is data-alignment, which training-free forbids. Also **resolves the twonn_id PARTIAL**: real-corpus ID measured at ~18–24 across 5 encoders, and ID is a **corpus** property (repo≈13 vs fiqa≈24, same encoder), not an encoder constant. Probes: `uniformity_lemma.rs`, `overlap_decomp.rs`, `centering_recall.rs`, `subspace_directions.rs`, `partition_balance.rs`, `fib_*.rs`. |
+| [length_mixture_lake_results.md](length_mixture_lake_results.md) | **Path B — chunk-length-mixture lake (closes the synthetic-lake arc).** Same fiqa docs embedded at 4 chunk lengths {128,256,512,1100} unioned into a 230k-doc lake; b=4 raw R@10 vs FP32 cosine is **immune** (+0.002, CR@100=1.0). Bonus measurement of the "chunk length is a third geometry axis" claim: real but **small and co-axial** — R̄ spreads only 0.705→0.723 over an 8.6× length range, cone axes ≥0.986 aligned (not the distinct geometries the mixture framing imagined). With Phase B (multi-domain) this leaves every synthetic lake pathology — multi-cone, hub, multi-length — benign for "spend the bits, b=4." Probe: `make_length_lake.py` + `centering_recall.rs`. |
 
 ## THEORY — directionally right, restated honestly
 
@@ -75,6 +76,13 @@ b=2 candidate pool contains every true neighbour (fp32-rerank=1.0), but the ~0.0
 tau gap is too weak to ORDER them — it scores below b=2's own ordering. The
 density-collapse signal is **real but inert**: "just use b=4," no ordvec feature
 follows.
+
+The **deployment-robustness** sub-arc is likewise resolved negative: across every
+synthetic lake pathology — multi-domain cones + templated hubs (Phase B) and now a
+chunk-length mixture ([length_mixture_lake_results.md](length_mixture_lake_results.md),
+Path B) — b=4 raw routing does not degrade (hub Δ −0.002 through 15%; length-mixture
+Δ +0.002). The only un-run test left needs *real* dirty data (OCR / multilingual S3
+sludge), uncapturable from clean embeddings.
 
 This is the honest bottom line of the whole branch: a characterized mechanism and
 a clean negative. **Research, not a feature** — the prime/spectral/permutation

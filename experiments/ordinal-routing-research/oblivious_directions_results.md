@@ -244,7 +244,10 @@ and every 512-char result above is conditioned on that one chunk length. We
 re-embed nomic@1100 on the SAME 57.6k fiqa docs to measure the shift directly
 (two-point: ID and R̄ delta). Deployment consequence: a real enterprise lake has
 documents at every chunk length at once → a *mixture* of geometries, not one — so
-chunk-length heterogeneity is itself a lake pathology (folds into Path B).
+chunk-length heterogeneity is itself a lake pathology (folds into Path B). **Path B
+was run** — see [length_mixture_lake_results.md](length_mixture_lake_results.md): the
+chunk-length axis is real but small and co-axial (R̄ 0.705→0.723 over 8.6× length,
+cones ≥0.986 aligned), and a 4-length mixture lake leaves b=4 raw R@10 immune (+0.002).
 
 ## Phase B — the messy multi-cone "lake" (deployment robustness)
 
