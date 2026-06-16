@@ -1,12 +1,22 @@
 # Ordinal-routing research — reviewer's guide
 
 Exploratory investigation into ordvec's **density behavior** and whether
-prime/spectral structure can improve training-free routing. Everything here is
-in `examples/` (runnable probes) and `benchmarks/` (findings + proofs) — **no
-changes to the `ordvec` crate or its public API.**
+prime/spectral structure can improve training-free routing. Everything lives in
+`experiments/ordinal-routing-research/` — the findings/proofs (`*.md`) next to the
+probes that produced them (`*.rs`, `embed_ollama.py`) — **no changes to the
+`ordvec` crate or its public API.** This directory is `package.exclude`d, so it
+ships with the source tree but not the published crate.
+
+> **Running the probes.** These were developed and run as Cargo examples. The
+> `cargo run --release --example <name>` commands and `examples/…` paths
+> throughout these docs refer to that original layout. To reproduce, copy the
+> relevant `.rs` from this directory into the crate's `examples/` directory and
+> run the command shown (they depend only on the existing `ordvec` / `rand` /
+> `rayon` dev-deps). They are kept here as reference source, not as a compiled
+> build target.
 
 Reviewed by three internal adversarial agents plus the PR bots; findings are
-tiered below by **what survived scrutiny**. Read the tiers, not all 11 docs.
+tiered below by **what survived scrutiny**. Read the tiers, not every doc.
 
 ## 3-minute path
 
@@ -33,7 +43,7 @@ tiered below by **what survived scrutiny**. Read the tiers, not all 11 docs.
 | doc | status |
 |-----|--------|
 | [rigidity_impossibility_proofs.md](rigidity_impossibility_proofs.md) | The routing key is not number-variance-rigid (Thm 2/3, binomial `L(1-L/n)`). The over-broad "quantile optimal over all partitions" claim is **retracted** as a non-sequitur. |
-| [conjecture_citation_audit.md](conjecture_citation_audit.md) | Citations verified by direct fetch (von Koch, Broughan-Barnett, Montgomery, Ethayarajh, etc.). |
+| [conjecture_citation_audit.md](conjecture_citation_audit.md) | Citations verified by direct fetch (Ethayarajh, Broughan-Barnett, etc.); a few subagent confabulations caught and corrected. |
 
 ## WITHDRAWN — see [withdrawn/](withdrawn/)
 

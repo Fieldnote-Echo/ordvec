@@ -2,7 +2,7 @@
 
 > Lean 4 formalization of this theorem lives in the companion repo:
 > [ordvec-formalization#17](https://github.com/Fieldnote-Echo/ordvec-formalization/pull/17)
-> (draft — proof sketch with proof debt, kept out of that repo's sorry-free tree).
+> (open PR, `sorry`-free).
 
 `examples/crt_seam_oracle.rs` enumerates the full ring Z/M to verify the
 within-axis vernier (coprime-grid) theorem exactly. This is the SPEC for the

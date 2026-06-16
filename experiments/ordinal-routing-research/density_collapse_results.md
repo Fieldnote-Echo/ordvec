@@ -26,15 +26,17 @@ Within each probe's b=2 "lookalike" set (M=40 Hamming-nearest), split by TRUE
 FP32 cosine into the true-neighbour half vs the far-lookalike half. Compare the
 top-k (k=16) Kendall-tau distance of the probe's coordinate ORDER to each:
 
-| density | true-nbr cosine | true-nbr tau | far cosine | far tau | probes tau_true<tau_far |
-|---------|-----------------|--------------|------------|---------|--------------------------|
-| noise=0.30 | 0.9397 | 0.2616 | 0.9250 | 0.2810 | 262/300 = 0.873 |
-| noise=0.10 | 0.9926 | 0.1250 | 0.9905 | 0.1388 | 272/300 = 0.907 |
+| density | true-nbr cosine | true-nbr tau | far cosine | far tau | tau gap (far − near) | 95% CI |
+|---------|-----------------|--------------|------------|---------|----------------------|--------|
+| noise=0.30 | 0.9397 | 0.3345 | 0.9250 | 0.3656 | 0.0311 | [0.0291, 0.0331] |
+| noise=0.10 | 0.9926 | 0.1423 | 0.9905 | 0.1602 | 0.0179 | [0.0166, 0.0191] |
 
 **The FP32-true neighbours have systematically LOWER intra-code Kendall-tau than
-the b2-lookalikes the code conflates them with — 87–91% of probes, both
-densities.** The fine permutation order (which coordinate outranks which, WITHIN
-the top bucket) separates true neighbours from false lookalikes.
+the b2-lookalikes the code conflates them with — gap ≈ 0.018–0.031, 95% CI
+strictly above 0 at both densities** (reported as the tau gap, not the retracted
+win-rate — see the M1/M2 correction below). The fine permutation order (which
+coordinate outranks which, WITHIN the top bucket) separates true neighbours from
+false lookalikes.
 
 ## Why this matters
 

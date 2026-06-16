@@ -11,8 +11,9 @@ The zoo gives evidence; these give the reason. Three claims, stated and proved.
 For any x ≠ 0 and scalar c > 0, K_r(cx) = K_r(x). So any structure a corpus
 encodes purely in vector NORMS is invisible to the key. In particular the
 `projected-rigid` construction x_i = t_i·u collapses under normalization to
-sign(t_i)·u ∈ {+u, −u}: 50k rigid magnitudes become 2 distinct keys. Measured
-Σ²/L = 1936 (degenerate), exactly as the quotient predicts. ∎
+sign(t_i)·u ∈ {+u, −u}: the 50k rigid magnitudes collapse toward ≈2 angular keys
+(±u, modulo the small orthogonal jitter the generator adds), so the key sees a
+near-degenerate occupancy exactly as the quotient predicts. ∎
 
 Consequence: rigidity must live in the ANGULAR distribution on the sphere
 S^{d-1}, or it does not exist for the key.
