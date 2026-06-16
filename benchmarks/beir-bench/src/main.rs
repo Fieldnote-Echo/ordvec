@@ -1497,7 +1497,13 @@ fn sign_scan_topm_par(
             let d0 = ci * chunk;
             #[cfg(target_arch = "x86_64")]
             {
-                if std::is_x86_feature_detected!("avx512vpopcntdq") {
+                // Guard EVERY feature the kernel enables via `#[target_feature]`
+                // (`avx512f` + `avx512vpopcntdq`) -- detecting only vpopcntdq would
+                // call into an under-verified target. Mirrors the core crate's
+                // dispatch (e.g. `lib.rs` / `multi_bucket.rs`).
+                if std::is_x86_feature_detected!("avx512f")
+                    && std::is_x86_feature_detected!("avx512vpopcntdq")
+                {
                     unsafe { scan_agree_avx512(codes, wpd, d0, qcode, slot) };
                     return;
                 }
