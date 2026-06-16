@@ -16,6 +16,20 @@ Training-free ordinal & sign quantization for vector retrieval.
 that quantizes the **ordinal (rank) and sign structure** of an embedding —
 no codebook, no learned rotation, no graph to build.
 
+## What is ordinal retrieval?
+
+Ordinal retrieval is a retrieval family where the index operates on order/sign
+quotients of embedding coordinates rather than metric magnitudes, with
+training-free compression, quotient-aware candidate generation, and asymmetric
+reranking against the original query signal.
+
+Dense retrieval assumes magnitude geometry is the primitive. Ordinal retrieval
+asks what survives when embeddings are quotiented down to coordinate order,
+signs, and relative salience. Surprisingly, enough retrieval signal survives to
+match dense qrel quality at much smaller storage, and those quotients support
+quotient-aware candidate-generation rules that are training-free,
+append-friendly, and graph-optional.
+
 ## Benchmark at a glance
 
 > **ordvec matches dense retrieval quality within BEIR qrel noise at 8–16× smaller
