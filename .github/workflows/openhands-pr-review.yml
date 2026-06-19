@@ -1,0 +1,50 @@
+name: OpenHands PR Review
+
+# Label-triggered review. This workflow uses pull_request_target so the
+# OpenHands agent can post PR review comments through GitHub Actions, but it
+# only receives secrets after a maintainer applies `review-this`.
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] on-demand label/reviewer gate; secrets are not exposed on PR-open/synchronize
+    types: [labeled]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: openhands-pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  pr-review:
+    name: openhands PR review
+    if: github.event.label.name == 'review-this'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411 # v2.19.4
+        with:
+          egress-policy: audit
+
+      - name: Check OpenHands API key
+        env:
+          LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
+        run: |
+          if [ -z "${LLM_API_KEY}" ]; then
+            echo "::error::Set the LLM_API_KEY repository secret before triggering OpenHands review."
+            exit 1
+          fi
+
+      # Keep both the action ref and the extensions checkout ref pinned to the
+      # same reviewed OpenHands/extensions commit. The plugin itself performs
+      # the PR checkout with persist-credentials disabled.
+      - name: Run OpenHands PR review
+        uses: OpenHands/extensions/plugins/pr-review@bb34a76d5230ba287cda4ea2883b5d008111575c
+        with:
+          extensions-version: bb34a76d5230ba287cda4ea2883b5d008111575c
+          llm-model: ${{ vars.OPENHANDS_LLM_MODEL || 'anthropic/claude-sonnet-4-5-20250929' }}
+          llm-base-url: ${{ vars.OPENHANDS_LLM_BASE_URL }}
+          llm-api-key: ${{ secrets.LLM_API_KEY }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
