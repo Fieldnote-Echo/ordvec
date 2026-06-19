@@ -7,7 +7,9 @@
 set -euo pipefail
 
 REPO="${REPO:-Project-Navi/ordvec}"
-EXPECTED_REVIEWER="${EXPECTED_REVIEWER:-Fieldnote-Echo}"
+EXPECTED_REVIEWER_COUNT="${EXPECTED_REVIEWER_COUNT:-2}"
+EXPECTED_REVIEWERS="${EXPECTED_REVIEWERS:-User:Fieldnote-Echo, User:toadkicker}"
+EXPECTED_WAIT_TIMER="${EXPECTED_WAIT_TIMER:-30}"
 EXPECTED_POLICY="${EXPECTED_POLICY:-v[0-9]*.[0-9]*.[0-9]*}"
 ENVIRONMENTS=(crates-io pypi)
 
@@ -47,8 +49,9 @@ check_environment() {
   local env_path="repos/${REPO}/environments/${env}"
   local policies_path="${env_path}/deployment-branch-policies?per_page=100"
   local env_data policies_data
-  local env_name required_rule_count reviewer_count reviewer_summary
+  local env_name required_rule_count reviewer_count reviewer_summary prevent_self_review
   local custom_branch_policies protected_branches
+  local wait_rule_count wait_timer
   local policy_total policy_summary policy_type policy_name
 
   echo "Auditing ${REPO} environment ${env}..."
@@ -57,11 +60,14 @@ check_environment() {
     (.name // ""),
     ([.protection_rules[]? | select(.type == "required_reviewers")] | length | tostring),
     ([.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]?] | length | tostring),
-    ([.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | "\(.type):\(.reviewer.login // .reviewer.slug // .reviewer.name // "unknown")"] | join(", ")),
+    ([.protection_rules[]? | select(.type == "required_reviewers") | .reviewers[]? | "\(.type):\(.reviewer.login // .reviewer.slug // .reviewer.name // "unknown")"] | sort | join(", ")),
+    ([.protection_rules[]? | select(.type == "required_reviewers") | .prevent_self_review] | first // false | tostring),
+    ([.protection_rules[]? | select(.type == "wait_timer")] | length | tostring),
+    ([.protection_rules[]? | select(.type == "wait_timer") | .wait_timer] | first // "" | tostring),
     (.deployment_branch_policy.custom_branch_policies | tostring),
     (.deployment_branch_policy.protected_branches | tostring)
   ] | @tsv')"
-  IFS=$'\t' read -r env_name required_rule_count reviewer_count reviewer_summary custom_branch_policies protected_branches <<< "$env_data"
+  IFS=$'\t' read -r env_name required_rule_count reviewer_count reviewer_summary prevent_self_review wait_rule_count wait_timer custom_branch_policies protected_branches <<< "$env_data"
 
   [ "$env_name" = "$env" ] \
     || fail "${env}: environment not found"
@@ -69,10 +75,18 @@ check_environment() {
   [ "$required_rule_count" = "1" ] \
     || fail "${env}: expected exactly one required_reviewers protection rule; found ${required_rule_count}"
 
-  [ "$reviewer_count" = "1" ] \
-    || fail "${env}: expected exactly one required reviewer User:${EXPECTED_REVIEWER}; found ${reviewer_count} (${reviewer_summary:-none})"
-  [ "$reviewer_summary" = "User:${EXPECTED_REVIEWER}" ] \
-    || fail "${env}: expected required reviewer User:${EXPECTED_REVIEWER}; found ${reviewer_summary:-none}"
+  [ "$reviewer_count" = "$EXPECTED_REVIEWER_COUNT" ] \
+    || fail "${env}: expected ${EXPECTED_REVIEWER_COUNT} required reviewers (${EXPECTED_REVIEWERS}); found ${reviewer_count} (${reviewer_summary:-none})"
+  [ "$reviewer_summary" = "$EXPECTED_REVIEWERS" ] \
+    || fail "${env}: expected required reviewers ${EXPECTED_REVIEWERS}; found ${reviewer_summary:-none}"
+
+  [ "$prevent_self_review" = "true" ] \
+    || fail "${env}: expected required_reviewers.prevent_self_review == true; found ${prevent_self_review}"
+
+  [ "$wait_rule_count" = "1" ] \
+    || fail "${env}: expected exactly one wait_timer protection rule; found ${wait_rule_count}"
+  [ "$wait_timer" = "$EXPECTED_WAIT_TIMER" ] \
+    || fail "${env}: expected wait_timer ${EXPECTED_WAIT_TIMER} minutes; found ${wait_timer:-none}"
 
   [ "$custom_branch_policies" = "true" ] \
     || fail "${env}: expected deployment_branch_policy.custom_branch_policies == true; found ${custom_branch_policies}"
@@ -97,7 +111,7 @@ check_environment() {
   [ "$policy_name" = "$EXPECTED_POLICY" ] \
     || fail "${env}: expected deployment policy name ${EXPECTED_POLICY}; found ${policy_name:-none}"
 
-  echo "OK: ${env} requires User:${EXPECTED_REVIEWER} and only tag:${EXPECTED_POLICY}."
+  echo "OK: ${env} requires ${EXPECTED_REVIEWERS}, blocks self-review, waits ${EXPECTED_WAIT_TIMER} minutes, and only tag:${EXPECTED_POLICY}."
 }
 
 for env in "${ENVIRONMENTS[@]}"; do

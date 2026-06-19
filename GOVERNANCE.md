@@ -26,6 +26,10 @@ describes how it is run.
   direction-setting changes (scope, public API, dependencies) are discussed in
   an issue or pull request first; the project lead makes the final call,
   consistent with the [roadmap](ROADMAP.md).
+- Registry publishes are gated by the `crates-io` and `pypi` GitHub
+  Environments. Both list `@Fieldnote-Echo` and `@toadkicker` as required
+  reviewers, block self-review, and enforce a 30-minute wait timer before a
+  publish job can mint registry OIDC credentials; see [RELEASING.md](RELEASING.md).
 - Decisions favour the project's stated scope — ordvec is a retrieval
   _primitive_ for edge / local AI retrieval, **not** a standalone vector
   database (see [ROADMAP.md](ROADMAP.md)).

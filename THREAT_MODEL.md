@@ -335,22 +335,23 @@ scoped to the wheel.
 
 ### 5.2 Risks
 
-**THREAT-SUPPLY-001 (mitigated; residual = single-maintainer account
-compromise): Release configuration and ownership.** The release **environments**
-(`pypi`, `crates-io`) require **approval by the maintainer** and restrict
-deployment to the **release-tag pattern `v[0-9]*.[0-9]*.[0-9]*`** (the
-tag-triggered workflow runs on `refs/tags/...`, not `refs/heads/main`, so a
-branch-only allowlist would deadlock publishing — see RELEASING.md). The
-`require-ci-green` gate independently verifies the tag SHA has a successful
-push-event CI run on `main`, and `main` itself is branch-protected (PR review,
-no force-push) — so a release cannot be cut from an unmerged or attacker
-branch, and no publish runs without an explicit human approval. The remaining residual is *maintainer-account compromise*: a
-single owner both cuts the release tag and approves all publishes, so account takeover (or social
-engineering) is not caught by a second human. *Mitigations:* strong 2FA /
-passkeys on the maintainer account; recruiting a **second owner/maintainer**
-(also an open OpenSSF Best-Practices item) — which would additionally make a
-deployment **wait timer** worthwhile (a second party able to cancel a bad
-release during the window). See [`RELEASING.md`](RELEASING.md).
+**THREAT-SUPPLY-001 (mitigated; residual = release-approver account
+compromise / collusion): Release configuration and ownership.** The release
+**environments** (`pypi`, `crates-io`) list `Fieldnote-Echo` and `toadkicker` as
+required reviewers, enable **prevent self-review**, enforce a **30-minute wait
+timer**, and restrict deployment to the **release-tag pattern
+`v[0-9]*.[0-9]*.[0-9]*`** (the tag-triggered workflow runs on
+`refs/tags/...`, not `refs/heads/main`, so a branch-only allowlist would
+deadlock publishing — see RELEASING.md). The `require-ci-green` gate
+independently verifies the tag SHA has a successful push-event CI run on `main`,
+and `main` itself is branch-protected (PR review, no force-push) — so a release
+cannot be cut from an unmerged or attacker branch, and no publish runs without
+an explicit human approval by a listed release approver who did not trigger the
+deployment. The remaining residual is compromise or misuse of an eligible
+approver account, or collusion between release participants. *Mitigations:*
+strong 2FA / passkeys on both approver accounts, a small reviewed approver list,
+and the 30-minute deployment window for the non-triggering approver to inspect
+or cancel a bad release. See [`RELEASING.md`](RELEASING.md).
 
 **THREAT-SUPPLY-002 (mitigated): Release immutability and tag integrity.**
 Published artifacts are **immutable by registry design** — crates.io is
@@ -369,7 +370,7 @@ the tag pattern `v[0-9]*.[0-9]*.[0-9]*`, and `require-ci-green` independently
 verifies the tag SHA has a successful push-event CI run on `main` — a SHA
 that only exists via a PR merge to the protected branch. *Residual:* draft / non-release tags are not covered by
 release immutability, and — as with the registries — these GitHub controls
-ultimately trust the single maintainer account; that residual folds into
+ultimately trust the release approver set; that residual folds into
 THREAT-SUPPLY-001.
 
 **THREAT-SUPPLY-003 (P3): Typosquatting adjacent names.** Namespace-adjacent
@@ -491,7 +492,7 @@ blast radius of a compromised dependency separately.
 | THREAT-FFI-003 | FFI | Binding | Accidental telemetry through ABI stats | Low | Low | **Mitigated** — caller-owned stats, no logging |
 | THREAT-FFI-004 | FFI | Binding | Concurrent input mutation during released-GIL call | Medium | Medium | **P2** — documented contract |
 | THREAT-FFI-005 | FFI | Binding | Unsanitized path forwarding | Medium | Medium | **P2** — documented contract |
-| THREAT-SUPPLY-001 | Supply chain | Config | Release config / single-owner | Low | Critical | **Mitigated** (reviewer-gated release-tag deployment + `require-ci-green` main-SHA gate); residual = account compromise / 2nd owner |
+| THREAT-SUPPLY-001 | Supply chain | Config | Release config / dual-approver gate | Low | Critical | **Mitigated** (two approvers, self-review blocked, 30-minute wait timer, `require-ci-green` main-SHA gate); residual = approver compromise / collusion |
 | THREAT-SUPPLY-002 | Supply chain | Config | Release immutability / tag integrity | Low | High | **Mitigated** — registries immutable; GitHub immutable releases on + `main` protected |
 | THREAT-SUPPLY-003 | Supply chain | Config | Typosquatting adjacent names | Medium | Medium | P3 |
 | THREAT-QUERY-001 | Resource | Deployment | Batch / `k` exhaustion in serving | Medium | Medium | **P2** — deployment docs |
@@ -527,8 +528,7 @@ x86_64/aarch64 unsafe paths (SIMD-004).
 1. Document recommended `nq` / `k` / corpus bounds for single-process serving
    in the Rust and Python API docs (THREAT-QUERY-001).
 
-**Later (not release blockers):** a second maintainer/owner (then a release
-wait timer becomes meaningful); stronger deployment-specific manifest
+**Later (not release blockers):** stronger deployment-specific manifest
 trust-policy UX such as external signatures/HMACs if a deployment requires
 tamper-evidence beyond `ordvec-manifest`'s hash-bound sidecar verification
 (DESER-002); a `safe_copy=True` FFI isolation option (FFI-001); layering ASAN

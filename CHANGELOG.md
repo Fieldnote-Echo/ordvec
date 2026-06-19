@@ -5,6 +5,15 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Security
+
+- Updated release governance to document and audit the two-approver
+  `crates-io` / `pypi` GitHub Environment gates: `Fieldnote-Echo` and
+  `toadkicker` are listed as required reviewers, self-review is blocked, and a
+  30-minute wait timer applies before registry publish jobs can proceed.
+
 ## 0.5.0 - 2026-06-19
 
 ### Security
