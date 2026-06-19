@@ -26,8 +26,8 @@
 use rayon::prelude::*;
 
 use crate::quant_kernels::{
-    scan_b1_to_topk, scan_b2_to_topk, scan_b4_to_topk, scan_b8_asym, scan_b8_to_topk,
-    scan_via_lut_scalar,
+    scan_b1_to_topk, scan_b2_to_topk, scan_b4_to_topk, scan_b8_asym, scan_b8_asym_with_lut,
+    scan_b8_to_topk, scan_via_lut_scalar, scan_via_lut_scalar_with_lut,
 };
 #[cfg(target_arch = "x86_64")]
 use crate::quant_kernels::{
@@ -48,6 +48,7 @@ use crate::{validate_candidate_ids, OrdvecError, SearchResults};
 pub struct SubsetScratch {
     q_unit: Vec<f32>,
     sub_packed: Vec<u8>,
+    scalar_lut: Vec<f32>,
     top: TopK,
     local_indices: Vec<i64>,
     final_order: Vec<(f32, i64, i64, usize)>,
@@ -58,6 +59,7 @@ impl Default for SubsetScratch {
         Self {
             q_unit: Vec::new(),
             sub_packed: Vec::new(),
+            scalar_lut: Vec::new(),
             top: TopK::new(0),
             local_indices: Vec::new(),
             final_order: Vec::new(),
@@ -82,10 +84,11 @@ impl SubsetScratch {
     /// `tests/` (which compile the crate without `cfg(test)`) can reach it; it
     /// is hidden from the public docs surface.
     #[doc(hidden)]
-    pub fn capacities_for_test(&self) -> (usize, usize, usize, usize) {
+    pub fn capacities_for_test(&self) -> (usize, usize, usize, usize, usize) {
         (
             self.q_unit.capacity(),
             self.sub_packed.capacity(),
+            self.scalar_lut.capacity(),
             self.local_indices.capacity(),
             self.final_order.capacity(),
         )
@@ -1160,13 +1163,14 @@ impl RankQuant {
         // The tie keys on `scratch.top` still map local scratch positions →
         // global row IDs exactly as for b ∈ {1,2,4}.
         if bits == 8 {
-            scan_b8_asym(
+            scan_b8_asym_with_lut(
                 &scratch.sub_packed,
                 m,
                 dim,
                 &scratch.q_unit,
                 inv_norm,
                 &mut scratch.top,
+                &mut scratch.scalar_lut,
             );
         } else {
             #[cfg(target_arch = "x86_64")]
@@ -1216,7 +1220,7 @@ impl RankQuant {
                             &mut scratch.top,
                         );
                     }
-                    _ => scan_via_lut_scalar(
+                    _ => scan_via_lut_scalar_with_lut(
                         &scratch.sub_packed,
                         m,
                         dim,
@@ -1225,11 +1229,12 @@ impl RankQuant {
                         &scratch.q_unit,
                         inv_norm,
                         &mut scratch.top,
+                        &mut scratch.scalar_lut,
                     ),
                 }
             }
             #[cfg(not(target_arch = "x86_64"))]
-            scan_via_lut_scalar(
+            scan_via_lut_scalar_with_lut(
                 &scratch.sub_packed,
                 m,
                 dim,
@@ -1238,6 +1243,7 @@ impl RankQuant {
                 &scratch.q_unit,
                 inv_norm,
                 &mut scratch.top,
+                &mut scratch.scalar_lut,
             );
         }
 
@@ -1259,8 +1265,8 @@ impl RankQuant {
     }
 
     /// Serial (NO rayon) batched subset rerank into caller-owned buffers.
-    /// Allocation-free after `scratch` warmup **on the SIMD rerank path
-    /// (AVX-512 / AVX2)**; the scalar fallback allocates a per-query scoring LUT.
+    /// Allocation-free after `scratch` warmup; both SIMD and scalar rerank
+    /// paths reuse caller-owned scratch buffers, including the scalar LUT.
     /// The integration contract for runtimes that own their own parallelism
     /// (call this from a bounded pool, with the GIL released, one row range per
     /// worker is the caller's choice).

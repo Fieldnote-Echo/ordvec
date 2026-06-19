@@ -58,21 +58,6 @@ fn batched_into_is_truly_allocation_free_after_warmup() {
     let k = 10usize;
     let bits = 2u8;
 
-    // The zero-allocation guarantee holds only when the rerank takes a SIMD
-    // kernel: the scalar LUT fallback (`scan_via_lut_scalar`) allocates a
-    // per-query LUT. Gate on the SAME dispatch decision the rerank reads — via
-    // `subset_rerank_uses_simd`, so the gate cannot drift from the actual
-    // dispatch — and skip the strict check on hosts that fall to scalar
-    // (aarch64, or x86 without AVX2+FMA / AVX-512).
-    if !ordvec::subset_rerank_uses_simd(dim, bits) {
-        eprintln!(
-            "alloc_free: rerank uses the scalar LUT fallback for \
-             (dim={dim}, bits={bits}) — it allocates a per-query LUT; \
-             skipping strict zero-alloc check"
-        );
-        return;
-    }
-
     let mut rng = ChaCha8Rng::seed_from_u64(2024);
     let corpus: Vec<f32> = (0..n * dim).map(|_| rng.random_range(-1.0..1.0)).collect();
     let mut sign = SignBitmap::new(dim);
