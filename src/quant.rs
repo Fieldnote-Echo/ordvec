@@ -84,11 +84,10 @@ impl SubsetScratch {
     /// `tests/` (which compile the crate without `cfg(test)`) can reach it; it
     /// is hidden from the public docs surface.
     #[doc(hidden)]
-    pub fn capacities_for_test(&self) -> (usize, usize, usize, usize, usize) {
+    pub fn capacities_for_test(&self) -> (usize, usize, usize, usize) {
         (
             self.q_unit.capacity(),
             self.sub_packed.capacity(),
-            self.scalar_lut.capacity(),
             self.local_indices.capacity(),
             self.final_order.capacity(),
         )
@@ -321,10 +320,10 @@ fn select_simd_tier(dim: usize, bits: u8) -> SimdTier {
 ///
 /// Returns `true` when the asymmetric subset rerank takes a SIMD kernel (vs the
 /// scalar LUT fallback) for a **constructor-valid** `(dim, bits)` on this CPU.
-/// The scalar fallback allocates a per-query LUT, so the allocation-free
-/// steady-state guarantee of
-/// [`RankQuant::search_asymmetric_subset_batched_serial_into`] holds exactly
-/// when this is `true`.
+/// The allocation-free tests use this to force coverage of both dispatch
+/// families; the steady-state allocation-free guarantee of
+/// [`RankQuant::search_asymmetric_subset_batched_serial_into`] applies after
+/// the caller-provided [`SubsetScratch`] is warmed.
 ///
 /// Returns `false` for any `(dim, bits)` that [`RankQuant::new`] would reject,
 /// so it answers "the rerank will take a SIMD kernel" rather than acting as a
@@ -1765,5 +1764,68 @@ pub fn search_asymmetric_byte_lut(index: &RankQuant, queries: &[f32], k: usize) 
         indices: indices_flat,
         nq,
         k,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn corpus(rows: usize, dim: usize) -> Vec<f32> {
+        let mut out = Vec::with_capacity(rows * dim);
+        for row in 0..rows {
+            for col in 0..dim {
+                out.push((((row + 3) * (col + 5)) % 23) as f32 - 11.0);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn scalar_lut_scratch_reuses_capacity_after_warmup() {
+        let dim = 64usize;
+        let rows = 16usize;
+        let mut index = RankQuant::new(dim, 1);
+        let corpus = corpus(rows, dim);
+        index.add(&corpus);
+
+        let nq = 2usize;
+        let queries = corpus[..nq * dim].to_vec();
+        let candidates: Vec<u32> = (0..rows as u32).chain(0..rows as u32).collect();
+        let candidate_offsets = vec![0usize, rows, rows * 2];
+        let k = 4usize;
+        let mut scores = vec![0.0f32; nq * k];
+        let mut indices = vec![0i64; nq * k];
+        let mut scratch = SubsetScratch::new();
+
+        index.search_asymmetric_subset_batched_serial_into(
+            &queries,
+            &candidate_offsets,
+            &candidates,
+            k,
+            &mut scratch,
+            &mut scores,
+            &mut indices,
+        );
+        let scalar_lut_capacity = scratch.scalar_lut.capacity();
+        assert!(
+            scalar_lut_capacity >= dim * 2,
+            "b=1 scalar LUT should reserve one row per coordinate and bucket"
+        );
+
+        index.search_asymmetric_subset_batched_serial_into(
+            &queries,
+            &candidate_offsets,
+            &candidates,
+            k,
+            &mut scratch,
+            &mut scores,
+            &mut indices,
+        );
+        assert_eq!(
+            scratch.scalar_lut.capacity(),
+            scalar_lut_capacity,
+            "scalar LUT scratch must reuse capacity after warmup"
+        );
     }
 }

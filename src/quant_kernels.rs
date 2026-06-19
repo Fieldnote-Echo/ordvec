@@ -43,10 +43,11 @@ pub(crate) fn build_asym_lut_into(
     n_buckets: usize,
     q_unit: &[f32],
 ) {
+    assert_eq!(q_unit.len(), dim);
     lut.resize(dim * n_buckets, 0.0);
-    for d in 0..dim {
-        for b in 0..n_buckets {
-            lut[d * n_buckets + b] = q_unit[d] * bucket_centre(b as u8, bits);
+    for (&qd, row) in q_unit.iter().zip(lut.chunks_exact_mut(n_buckets)) {
+        for (b, slot) in row.iter_mut().enumerate() {
+            *slot = qd * bucket_centre(b as u8, bits);
         }
     }
 }
@@ -168,9 +169,7 @@ pub(crate) fn scan_b4_to_topk(
 pub(crate) fn build_b8_asym_lut_into(lut: &mut Vec<f32>, q_unit: &[f32]) {
     let dim = q_unit.len();
     lut.resize(dim * 256, 0.0);
-    for d in 0..dim {
-        let qd = q_unit[d];
-        let row = &mut lut[d * 256..(d + 1) * 256];
+    for (&qd, row) in q_unit.iter().zip(lut.chunks_exact_mut(256)) {
         for (code, slot) in row.iter_mut().enumerate() {
             *slot = qd * bucket_centre(code as u8, 8);
         }
@@ -611,6 +610,7 @@ pub(crate) fn scan_b8_asym_with_lut(
     top: &mut TopK,
     lut: &mut Vec<f32>,
 ) {
+    assert_eq!(q_unit.len(), dim);
     build_b8_asym_lut_into(lut, q_unit);
     #[cfg(target_arch = "x86_64")]
     {
@@ -694,7 +694,7 @@ pub(crate) unsafe fn scan_b8_asym_avx512_gather(
         // Hard backstop (see `scan_b2_asym_avx2`): mis-dispatch must fail
         // loudly in release, not silently drop the trailing chunk.
         assert_eq!(dim % 16, 0, "b=8 AVX-512 gather path needs dim % 16 == 0");
-        debug_assert_eq!(lut.len(), dim * 256, "b=8 LUT must be dim * 256 entries");
+        assert_eq!(lut.len(), dim * 256, "b=8 LUT must be dim * 256 entries");
         let bytes_per_vec = dim; // one byte per coordinate
         let lut_ptr = lut.as_ptr();
 
