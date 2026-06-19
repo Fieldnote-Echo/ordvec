@@ -1,11 +1,11 @@
 # ordvec
 
-[![CI](https://github.com/Fieldnote-Echo/ordvec/actions/workflows/ci.yml/badge.svg)](https://github.com/Fieldnote-Echo/ordvec/actions/workflows/ci.yml)
+[![CI](https://github.com/Project-Navi/ordvec/actions/workflows/ci.yml/badge.svg)](https://github.com/Project-Navi/ordvec/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/License-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![MSRV](https://img.shields.io/badge/MSRV-1.89-blue.svg)](#minimum-supported-rust-version)
-[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Fieldnote-Echo/ordvec/badge)](https://scorecard.dev/viewer/?uri=github.com/Fieldnote-Echo/ordvec)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/Project-Navi/ordvec/badge)](https://scorecard.dev/viewer/?uri=github.com/Project-Navi/ordvec)
 [![OpenSSF Best Practices](https://www.bestpractices.dev/projects/12977/badge)](https://www.bestpractices.dev/projects/12977)
-[![codecov](https://codecov.io/gh/Fieldnote-Echo/ordvec/graph/badge.svg)](https://codecov.io/gh/Fieldnote-Echo/ordvec)
+[![codecov](https://codecov.io/gh/Project-Navi/ordvec/graph/badge.svg)](https://codecov.io/gh/Project-Navi/ordvec)
 
 [![Crates.io](https://img.shields.io/crates/v/ordvec.svg)](https://crates.io/crates/ordvec)
 [![docs.rs](https://docs.rs/ordvec/badge.svg)](https://docs.rs/ordvec)
@@ -44,7 +44,7 @@ keeps a near-flat per-query cost as the corpus grows, while exact brute-force
 (`flat`, identical math to FAISS `IndexFlatIP`) is O(n) — so the speedup
 *widens* with scale:
 
-![ordvec speedup over exact search grows with corpus size](https://raw.githubusercontent.com/Fieldnote-Echo/ordvec/main/benchmarks/beir/figures/scaling_curve.png)
+![ordvec speedup over exact search grows with corpus size](https://raw.githubusercontent.com/Project-Navi/ordvec/main/benchmarks/beir/figures/scaling_curve.png)
 
 - **~100× faster, single query.** At 171K docs, single-query latency: exact
   `flat` 56 ms vs ordvec `Sign→rq2` **0.53 ms** — and the gap grows with the
@@ -184,7 +184,7 @@ Details in [`docs/RANK_MODES.md`](docs/RANK_MODES.md).
 ordvec = "0.5"
 
 # Or, to track unreleased `main`, use a git dependency instead:
-# ordvec = { git = "https://github.com/Fieldnote-Echo/ordvec" }
+# ordvec = { git = "https://github.com/Project-Navi/ordvec" }
 ```
 
 ```rust
@@ -262,7 +262,7 @@ pip install ordvec
 ```
 
 Wheels target CPython 3.10+ (abi3); to build from source instead, see
-[`ordvec-python/`](https://github.com/Fieldnote-Echo/ordvec/tree/main/ordvec-python).
+[`ordvec-python/`](https://github.com/Project-Navi/ordvec/tree/main/ordvec-python).
 The runtime dependency floor is `numpy>=2.2`.
 
 ### Threading / concurrency
@@ -287,16 +287,16 @@ candidate slices passed to `Search` until the call returns.
 - **Design deep-dive & reproducible benchmark tables:**
   [`docs/RANK_MODES.md`](docs/RANK_MODES.md)
 - **Design alternatives evaluated and cut:**
-  [`docs/ALTERNATIVES_CONSIDERED.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/ALTERNATIVES_CONSIDERED.md)
+  [`docs/ALTERNATIVES_CONSIDERED.md`](https://github.com/Project-Navi/ordvec/blob/main/docs/ALTERNATIVES_CONSIDERED.md)
 - **Index-file trust model:**
-  [`docs/INDEX_PROVENANCE.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/INDEX_PROVENANCE.md),
-  [`docs/determinism.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/determinism.md),
-  [`THREAT_MODEL.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/THREAT_MODEL.md)
+  [`docs/INDEX_PROVENANCE.md`](https://github.com/Project-Navi/ordvec/blob/main/docs/INDEX_PROVENANCE.md),
+  [`docs/determinism.md`](https://github.com/Project-Navi/ordvec/blob/main/docs/determinism.md),
+  [`THREAT_MODEL.md`](https://github.com/Project-Navi/ordvec/blob/main/THREAT_MODEL.md)
 - **Manifest verifier, C ABI, and Go wrapper:**
   `ordvec-manifest` is versioned and published in lockstep with the core crate
   through its own package gate; use the GitHub checkout for `ordvec-ffi/`,
   `ordvec-go/`, and
-  [`docs/c-api.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/c-api.md).
+  [`docs/c-api.md`](https://github.com/Project-Navi/ordvec/blob/main/docs/c-api.md).
 - **Bindings safety and ownership contract:**
   [`docs/bindings-safety.md`](docs/bindings-safety.md)
 - **Artifact and platform matrix:**
@@ -318,7 +318,7 @@ candidate slices passed to `Search` until the call returns.
 ### BEIR retrieval (public datasets, reproducible)
 
 A fully reproducible harness over standard [BEIR](https://github.com/beir-cellar/beir)
-datasets lives in [`benchmarks/beir/`](https://github.com/Fieldnote-Echo/ordvec/tree/main/benchmarks/beir). It embeds the corpus
+datasets lives in [`benchmarks/beir/`](https://github.com/Project-Navi/ordvec/tree/main/benchmarks/beir). It embeds the corpus
 with **Harrier-Q8** (GGUF `Q8_0` via `llama-cpp-python`, CUDA), then measures
 ordvec's methods against two references **in a single Rust process** so the
 latency comparison is genuinely apples-to-apples — same machine, batch, and
@@ -379,7 +379,7 @@ views (trec-covid, 171,332 docs, 1024-d):
 **1. Single query (batch = 1, 1 thread)** — latency-sensitive serving, where
 `flat` cannot amortize its memory traffic:
 
-![single-query latency bars](https://raw.githubusercontent.com/Fieldnote-Echo/ordvec/main/benchmarks/beir/figures/bars_single_thread.png)
+![single-query latency bars](https://raw.githubusercontent.com/Project-Navi/ordvec/main/benchmarks/beir/figures/bars_single_thread.png)
 
 `flat` 56 ms → ordvec `sign→rq2` **0.53 ms (≈106×)**, `bitmap→rq2` 0.62 ms (≈91×),
 `hnsw` 1.5 ms (37×). The scaling curve [above](#benchmark-at-a-glance) is this
@@ -392,7 +392,7 @@ narrowing the gap: ordvec `sign→rq2`/`bitmap→rq2` stay ≈8–9.5× ahead.
 **3. Many cores (batch = 32, 32 threads)** — everything parallelizes and the
 field compresses; `hnsw` threads best:
 
-![threaded throughput bars](https://raw.githubusercontent.com/Fieldnote-Echo/ordvec/main/benchmarks/beir/figures/bars_threaded.png)
+![threaded throughput bars](https://raw.githubusercontent.com/Project-Navi/ordvec/main/benchmarks/beir/figures/bars_threaded.png)
 
 `hnsw` 4.8× vs `flat`, ordvec `bitmap→rq2` 3.7×, `rq2` 2.5×, `sign→rq2` 2.1×.
 This committed chart uses the default `sign-rq2` row, not the newer
@@ -483,9 +483,9 @@ header metadata, row identity, named auxiliary sidecars, and attestation shape
 checks. It does not sign artifacts, manage keys, or decide deployment trust
 policy. No in-format crypto is shipped because it would add key management the
 library can't own. See
-[`docs/PERSISTED_FORMAT.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/PERSISTED_FORMAT.md),
-[`docs/INDEX_PROVENANCE.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/docs/INDEX_PROVENANCE.md),
-and [`THREAT_MODEL.md`](https://github.com/Fieldnote-Echo/ordvec/blob/main/THREAT_MODEL.md)
+[`docs/PERSISTED_FORMAT.md`](https://github.com/Project-Navi/ordvec/blob/main/docs/PERSISTED_FORMAT.md),
+[`docs/INDEX_PROVENANCE.md`](https://github.com/Project-Navi/ordvec/blob/main/docs/INDEX_PROVENANCE.md),
+and [`THREAT_MODEL.md`](https://github.com/Project-Navi/ordvec/blob/main/THREAT_MODEL.md)
 in the full repository.
 
 ## Provenance
@@ -524,13 +524,13 @@ Collaboration we're actively seeking:
   and reporting the numbers.
 
 If that's your area, see
-[GOVERNANCE.md](https://github.com/Fieldnote-Echo/ordvec/blob/main/GOVERNANCE.md)
+[GOVERNANCE.md](https://github.com/Project-Navi/ordvec/blob/main/GOVERNANCE.md)
 and open an issue or a discussion.
 
 ## Contributing
 
 Contributions to the code, the docs, and the paper are all welcome — see
-[CONTRIBUTING.md](https://github.com/Fieldnote-Echo/ordvec/blob/main/CONTRIBUTING.md).
+[CONTRIBUTING.md](https://github.com/Project-Navi/ordvec/blob/main/CONTRIBUTING.md).
 
 ## Minimum supported Rust version
 

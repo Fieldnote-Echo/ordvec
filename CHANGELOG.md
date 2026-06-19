@@ -328,6 +328,6 @@ system dependencies** — no BLAS, no `ndarray`, no `faer`.
   AVX-512 intrinsics this crate relies on were stabilized.
 - Dual-licensed under **MIT OR Apache-2.0**.
 
-[0.4.0]: https://github.com/Fieldnote-Echo/ordvec/compare/v0.3.0...v0.4.0
-[0.2.0]: https://github.com/Fieldnote-Echo/ordvec/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/Fieldnote-Echo/ordvec/releases/tag/v0.1.0
+[0.4.0]: https://github.com/Project-Navi/ordvec/compare/v0.3.0...v0.4.0
+[0.2.0]: https://github.com/Project-Navi/ordvec/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/Project-Navi/ordvec/releases/tag/v0.1.0
