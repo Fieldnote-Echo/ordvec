@@ -5,6 +5,10 @@
 //! still live with their owning index code, but dispatchers should identify
 //! formats through this registry so new magics cannot silently drift across
 //! trust-boundary surfaces.
+//!
+//! This module is `#[doc(hidden)]` in v0.5.0. It is public only as lockstep
+//! support for workspace crates such as `ordvec-manifest`, not as a documented
+//! downstream extension surface.
 
 use crate::rank_io::IndexKind;
 

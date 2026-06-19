@@ -12,7 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Hardened the Python binding's GIL-released search, candidate, scoring, and
   `add` paths: NumPy inputs are now copied into Rust-owned buffers before
   `py.detach`, so safe Python code cannot race a detached Rust read by mutating
-  the same array from another thread.
+  the same array from another thread. This intentionally trades zero-copy
+  detached reads for race-free copied inputs; large calls may temporarily require
+  an additional input-sized buffer.
 - Updated release governance to document and audit the two-approver
   `crates-io` / `pypi` GitHub Environment gates: `Fieldnote-Echo` and
   `toadkicker` are listed as required reviewers, self-review is blocked, and a

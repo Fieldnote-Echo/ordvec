@@ -113,9 +113,9 @@ fn check_bits_124(bits: u8) -> PyResult<()> {
     Ok(())
 }
 
-/// Reject a `bits` value outside the Python constructor surface. The Rust core
-/// has b=8 evidence/refinement helpers, but Python `RankQuant` exposes only the
-/// byte-aligned persisted widths through this constructor path.
+/// Reject a `bits` value outside the Python primitive-helper surface. The Rust
+/// core has b=8 evidence/refinement helpers, but these Python helpers still
+/// cap single-byte bucket alphabets at b<=7 in v0.5.0.
 fn check_bits_max7(bits: u8) -> PyResult<()> {
     if bits > 7 {
         return Err(pyo3::exceptions::PyValueError::new_err("bits must be <= 7"));

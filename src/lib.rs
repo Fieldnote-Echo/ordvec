@@ -83,6 +83,7 @@ pub mod const_weight_bitmap;
 #[cfg(feature = "experimental")]
 mod contingency;
 mod fastscan;
+#[doc(hidden)]
 pub mod format;
 #[cfg(feature = "experimental")]
 mod multi_bucket;
@@ -95,6 +96,7 @@ pub mod sign_bitmap;
 mod util;
 
 pub use bitmap::Bitmap;
+#[doc(hidden)]
 pub use format::{
     FfiLoadSupport, FormatSpec, ManifestCoverage, PersistedFormat, ProbeCoverage, FORMATS,
 };

@@ -278,7 +278,8 @@ The consolidated cross-language ownership and lifetime contract is in
 
 Python search, candidate-generation, scoring, and `add` methods release the GIL
 after copying NumPy inputs into Rust-owned buffers, so ordinary Python in-place
-array mutation in another thread cannot race the detached Rust scan.
+array mutation in another thread cannot race the detached Rust scan. Large calls
+may temporarily require an additional input-sized buffer.
 
 The C ABI allows concurrent search and info calls on one loaded handle.
 `ordvec_index_free` must not race with any other call on the same handle.

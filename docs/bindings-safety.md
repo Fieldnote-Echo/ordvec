@@ -14,7 +14,8 @@ still own scheduling, path trust, input mutability, and deployment provenance.
 - Python search, candidate-generation, scoring, and `add` methods release the
   GIL while Rust performs the heavy work. PyO3 still enforces object borrow
   rules, and the binding copies NumPy input arrays into Rust-owned buffers
-  before releasing the GIL.
+  before releasing the GIL. Large calls may temporarily require an additional
+  input-sized buffer.
 - The C ABI permits concurrent `ordvec_index_search`,
   `ordvec_index_probe`, and `ordvec_index_info` calls on one loaded handle.
   `ordvec_index_free` must not race with any other call on that handle.
