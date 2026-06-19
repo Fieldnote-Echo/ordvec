@@ -1,11 +1,11 @@
 # Releasing `ordvec`
 
-> **Publish is held.** A real crates.io / PyPI publish happens only on
-> the maintainer's explicit approval. CI never publishes — the unified release
-> pipeline builds, attests, and attaches everything to the GitHub Release
-> automatically on a tag push, then **waits at the `crates-io` and `pypi`
-> environment gates** for a required-reviewer approval before any registry
-> push.
+> **Publish is held.** A real crates.io / PyPI publish happens only after
+> an eligible release approver explicitly approves the protected deployment.
+> CI never publishes on its own — the unified release pipeline builds, attests,
+> and attaches everything to the GitHub Release automatically on a tag push,
+> then **waits at the `crates-io` and `pypi` environment gates** for the
+> required-reviewer approval and 30-minute wait timer before any registry push.
 
 `ordvec` (the Rust crate), `ordvec-manifest` (the lockstep manifest verifier
 crate), `ordvec` on PyPI (the PyO3 wheel built from `ordvec-python/`), and
@@ -86,8 +86,15 @@ the GitHub Release.
 
 ### Environment protection (configured in repo settings, not in code)
 
-- **Required reviewer** — each environment (`crates-io`, `pypi`) requires
-  maintainer (`Fieldnote-Echo`) approval before its publish job runs.
+- **Required reviewers and self-review prevention** — each environment
+  (`crates-io`, `pypi`) lists `Fieldnote-Echo` and `toadkicker` as required
+  reviewers and has **prevent self-review** enabled. GitHub still requires one
+  approving reviewer per deployment, but the account that triggered the
+  deployment cannot approve it; a second listed release approver must clear the
+  publish gate.
+- **Wait timer** — each environment has a **30-minute wait timer**. No registry
+  OIDC credential is minted until both the wait timer and the required-reviewer
+  approval have passed.
 - **Deployment branches and tags** — each environment's "Deployment branches
   and tags" policy is set to **Selected branches and tags** with a single
   **tag pattern**: **`v[0-9]*.[0-9]*.[0-9]*`** (matching the workflow's
@@ -101,8 +108,9 @@ the GitHub Release.
   **tag ruleset** (Settings → Rules → Rulesets → New tag ruleset) can be added
   to restrict tag *creation* to refs on `main` as defence in depth.
 
-> These two settings are the supply-chain backstop the workflow code cannot
-> express on its own (THREAT-SUPPLY-001 in [THREAT_MODEL.md](THREAT_MODEL.md)).
+> These environment settings are the supply-chain backstop the workflow code
+> cannot express on its own (THREAT-SUPPLY-001 in
+> [THREAT_MODEL.md](THREAT_MODEL.md)).
 
 ### Trusted-publisher configuration (one-time, in the registries)
 
@@ -203,12 +211,13 @@ the OIDC exchange (no risk of a bad publish; just a failed run).
    bash tests/release_environment_settings.sh
    ```
 
-   This verifies the GitHub Environments still require the expected reviewer
-   and accept only the stable release tag pattern. Separately verify the
-   registry Trusted Publisher records by hand: crates.io must point both
-   `ordvec` and `ordvec-manifest` to `release.yml` / `crates-io`, and PyPI must
-   point both `ordvec` and `ordvec-manifest` to `release.yml` / `pypi`.
-6. Get the maintainer's explicit go to publish.
+   This verifies the GitHub Environments still require the expected reviewers,
+   prevent self-review, apply the 30-minute wait timer, and accept only the
+   stable release tag pattern. Separately verify the registry Trusted Publisher
+   records by hand: crates.io must point both `ordvec` and `ordvec-manifest` to
+   `release.yml` / `crates-io`, and PyPI must point both `ordvec` and
+   `ordvec-manifest` to `release.yml` / `pypi`.
+6. Get explicit maintainer agreement to publish.
 7. Push the version tag from `main` (signed):
 
    ```sh
@@ -231,7 +240,10 @@ the OIDC exchange (no risk of a bad publish; just a failed run).
    `publish-pypi`, and `publish-manifest-pypi`. The two crates.io jobs use the
    same `crates-io` environment and may require separate approvals; the two PyPI
    jobs use the `pypi` environment and may also require separate approvals.
-   Required-reviewer approval is what authorises each registry push.
+   Each job must also clear the 30-minute wait timer. Because self-review is
+   blocked, the account that triggered the deployment cannot approve it; use the
+   other listed release approver in the Actions UI. Required-reviewer approval is
+   what authorises each registry push.
    - `publish-crate` and `publish-manifest-crate` first sha256-compare their
      repackaged `.crate` to the SLSA-attested artifact — if either diverges
      (toolchain drift, etc.) the job fails closed BEFORE the OIDC token is

@@ -117,9 +117,10 @@ Changelog and release notes are generated with
   `ordvec-manifest` crate is built and staged only after the core `ordvec`
   crate publishes, because Cargo cannot package a fresh manifest version until
   the matching core version exists on crates.io. The `crates.io` and `pypi`
-  publishes wait at GitHub Environments with **Required reviewers** (the
-  maintainer approves each in the Actions UI), and the GitHub Release un-drafts
-  only after all registry publishes succeed. Pre-release tags (e.g.
+  publishes wait at GitHub Environments with **Required reviewers**
+  (`@Fieldnote-Echo` and `@toadkicker`), self-review prevention, and a
+  30-minute wait timer, and the GitHub Release un-drafts only after all
+  registry publishes succeed. Pre-release tags (e.g.
   `v0.3.0-rc.1`) do not trigger it.
 - **`CHANGELOG.md` is curated by hand** — it is not auto-committed, because
   `main` is branch-protected. Keep adding entries under `[Unreleased]`; at
