@@ -10,6 +10,8 @@ bilinear identity, recall bounds) lives in the crate's Rust tests under
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import threading
+import time
 
 import numpy as np
 import pytest
@@ -130,6 +132,50 @@ def test_search_asymmetric_read_concurrent_results_match_baseline():
         results = list(pool.map(lambda _: run_search(), range(40)))
 
     for scores, indices in results:
+        np.testing.assert_array_equal(indices, baseline_indices)
+        np.testing.assert_allclose(scores, baseline_scores, rtol=0, atol=0)
+
+
+def test_search_asymmetric_snapshots_query_before_detach():
+    corpus = np.ascontiguousarray(unit_vectors(25_000, 128, seed=303))
+    queries = np.ascontiguousarray(unit_vectors(256, 128, seed=404))
+    idx = RankQuant(dim=128, bits=2)
+    idx.add(corpus)
+
+    baseline_scores, baseline_indices = idx.search_asymmetric(queries.copy(), k=8)
+
+    for _ in range(3):
+        mutable_queries = queries.copy()
+        result: dict[str, tuple[np.ndarray, np.ndarray]] = {}
+        errors: list[BaseException] = []
+
+        def run_search() -> None:
+            try:
+                result["out"] = idx.search_asymmetric(mutable_queries, k=8)
+            except BaseException as exc:  # pragma: no cover - re-raised below
+                errors.append(exc)
+
+        worker = threading.Thread(target=run_search)
+        worker.start()
+        # Give the worker a chance to enter the extension and release the GIL.
+        # With copy-before-detach, this thread cannot run until the Rust-owned
+        # snapshot exists; with a borrowed detached slice, the mutations below
+        # can change query rows that Rust has not consumed yet.
+        time.sleep(0.001)
+
+        mutations = 0
+        while worker.is_alive() and mutations < 1_000:
+            mutable_queries[:, :] = -queries
+            mutable_queries[:, ::2] = 0.0
+            mutations += 1
+
+        worker.join(timeout=5.0)
+        assert not worker.is_alive()
+        if errors:
+            raise errors[0]
+        assert mutations > 0, "search finished before mutation tripwire ran"
+
+        scores, indices = result["out"]
         np.testing.assert_array_equal(indices, baseline_indices)
         np.testing.assert_allclose(scores, baseline_scores, rtol=0, atol=0)
 
