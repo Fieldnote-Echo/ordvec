@@ -5,9 +5,13 @@ describes how it is run.
 
 ## Roles
 
-- **Maintainer.** ordvec is currently maintained by Nelson Spence
-  ([@Fieldnote-Echo](https://github.com/Fieldnote-Echo)), the project lead and
-  final decision-maker on technical direction, releases, and scope.
+- **Maintainers.** ordvec is jointly maintained by
+  [Project-Navi](https://github.com/Project-Navi) and
+  [Baur-Software](https://github.com/Baur-Software). Nelson Spence
+  ([@Fieldnote-Echo](https://github.com/Fieldnote-Echo)) is the project lead
+  and final decision-maker on technical direction, releases, and scope; Todd
+  Baur ([@toadkicker](https://github.com/toadkicker)) represents
+  Baur-Software in repository review and stewardship.
 - **Code owners.** Listed in [`.github/CODEOWNERS`](https://github.com/Project-Navi/ordvec/blob/main/.github/CODEOWNERS); they
   review and approve changes.
 
@@ -20,7 +24,7 @@ describes how it is run.
   merge.
 - Routine changes are decided by maintainer / code-owner review. Larger,
   direction-setting changes (scope, public API, dependencies) are discussed in
-  an issue or pull request first; the maintainer makes the final call,
+  an issue or pull request first; the project lead makes the final call,
   consistent with the [roadmap](ROADMAP.md).
 - Decisions favour the project's stated scope — ordvec is a retrieval
   _primitive_ for edge / local AI retrieval, **not** a standalone vector
