@@ -222,6 +222,7 @@ jobs:
         uses: ./.github/actions/setup-intel-sde
         with:
           version: ${{ env.SDE_VERSION }}
+          url-base: https://github.com/nihui/ncnn-assets/releases/download/toolchain
           sha256: ${{ env.SDE_SHA256 }}
           allow-unavailable: "false"
       - name: Sanity-check AVX-512 detection under SDE
