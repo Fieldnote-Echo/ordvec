@@ -49,7 +49,7 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use ordvec::rank::rank_norm;
-use ordvec::{search_asymmetric_byte_lut, Bitmap, Rank, RankQuant, SignBitmap};
+use ordvec::{Bitmap, Rank, RankQuant, SignBitmap};
 
 /// `MAX_VECTORS` from `rank_io` — the on-disk document-count ceiling.
 /// Re-declared here (not imported) to keep the test independent of
@@ -707,8 +707,11 @@ fn delta_d4_large_nq_small_k() {
 /// `b = 1` to the scalar LUT and is unaffected — covered by the `beta`
 /// suite). This is an intentional, documented contract, not a bug.
 #[test]
+#[cfg(feature = "bench-utils")]
 #[should_panic(expected = "byte-LUT path only supports bits")]
 fn delta_e1_byte_lut_panics_on_b1_index() {
+    use ordvec::search_asymmetric_byte_lut;
+
     let dim = 64;
     let mut idx = RankQuant::new(dim, 1);
     idx.add(&make_corpus(8901, 8, dim));

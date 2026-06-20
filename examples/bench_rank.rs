@@ -7,7 +7,7 @@
 //! synthetic corpus in-process, so the headline numbers are regenerable
 //! from a clean checkout with a single command:
 //!
-//!     cargo run --release --example bench_rank
+//!     cargo run --release --features bench-utils --example bench_rank
 //!
 //! No system dependencies are required — ordvec links no BLAS.
 //!
@@ -31,11 +31,11 @@
 //! `benchmarks/rank_modes_results.txt`.
 //!
 //! Larger sweeps / real public corpora:
-//!     cargo run --release --example bench_rank -- --dim 1024 --n 100000 --queries 200
+//!     cargo run --release --features bench-utils --example bench_rank -- --dim 1024 --n 100000 --queries 200
 //!     # Point at a real public embedding corpus (no file required for
 //!     # the default run). Both must be 2-D little-endian float32 .npy
 //!     # (C order). For GloVe or OpenAI text-embedding-3 dumps:
-//!     cargo run --release --example bench_rank -- \
+//!     cargo run --release --features bench-utils --example bench_rank -- \
 //!         --corpus-npy /path/to/corpus.npy --queries-npy /path/to/queries.npy
 //!
 //! Output is a human-readable table followed by a JSON line for

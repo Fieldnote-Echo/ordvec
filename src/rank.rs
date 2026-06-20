@@ -87,31 +87,10 @@ pub fn rank_transform_into(v: &[f32], out: &mut [u16]) {
 /// hot path.
 #[inline]
 pub fn rank_to_bucket(rank: u16, d: usize, bits: u8) -> u8 {
-    // `bits` is a `u8`, so a caller could pass e.g. 9 or 255. `1u32 << bits`
-    // overflows for `bits >= 32` (in release that silently wraps and yields a
-    // wrong bucket; in debug it panics inconsistently), and the result must
-    // also fit in the returned `u8`, so cap at 8 — the widest RankQuant width
-    // (b=8 yields one bucket per code value in `[0, 256)`, which still fits a
-    // `u8`). `d == 0` would divide by zero. Guard both up front so the failure
-    // is loud in every build.
     assert!(bits <= 8, "bits too large");
     assert!(d > 0, "d must be positive");
-    // A valid rank is a position in `[0, d)`. Reject `rank >= d` loudly instead
-    // of silently clamping the quotient back into range: the rest of the public
-    // bucket API ([`pack_buckets`] / [`bucket_centre`]) fails loud on an
-    // out-of-domain argument, so a direct caller that miscomputes a rank should
-    // hear about it rather than receive a plausible-but-wrong bucket.
     assert!((rank as usize) < d, "rank ({rank}) must be < d ({d})");
     let n_buckets = 1u32 << bits;
-    // u64 math: `d` is a `usize` and reaches this from the Python binding as a
-    // free argument, so `d as u32` could truncate a `d >= 2^32` (e.g. to 0,
-    // which would divide by zero and panic). rank ≤ u16::MAX and n_buckets ≤
-    // 128, so the product fits u64 comfortably; over the realistic d ≤ u16::MAX
-    // domain this is bit-identical to the previous u32 form.
-    //
-    // With `rank < d` guaranteed above, `rank * n_buckets / d < n_buckets`
-    // (integer division floors), so the quotient already lands in
-    // `[0, n_buckets)` and fits the returned `u8` without a clamp.
     ((rank as u64 * n_buckets as u64) / d as u64) as u8
 }
 
@@ -123,10 +102,6 @@ pub fn rank_to_bucket(rank: u16, d: usize, bits: u8) -> u8 {
 /// valid rank vector is a permutation of `[0, ranks.len())`, so well-formed
 /// input never trips the per-entry guard.
 pub fn bucket_ranks(ranks: &[u16], bits: u8) -> Vec<u8> {
-    // Validate `bits` up front so an invalid width fails loud even for empty
-    // input — an empty `ranks` skips the per-entry `rank_to_bucket` check and
-    // would otherwise silently return an empty vec. Mirrors the Python binding,
-    // which checks `bits` before its empty short-circuit.
     assert!(bits <= 8, "bits too large");
     let d = ranks.len();
     ranks.iter().map(|&r| rank_to_bucket(r, d, bits)).collect()
@@ -166,14 +141,6 @@ pub fn pack_buckets(buckets: &[u8], bits: u8) -> Vec<u8> {
     let n_bytes = d / codes_per_byte;
     let mut out = vec![0u8; n_bytes];
     let bits_u = bits as usize;
-    // Pack in a single pass, failing loud on an out-of-range code rather than
-    // silently masking it (`code & mask` would turn e.g. 7 at bits=2 into 3,
-    // packing a different vector). Checking inside the loop keeps the
-    // fail-loud guarantee without a second O(d) pass over `buckets`; the
-    // branch is loop-invariant-predictable for the always-valid internal
-    // callers. Asserting `b <= mask` makes the trailing `& mask` redundant.
-    // At `b=8`, `codes_per_byte == 1`, so `shift == 0` and each byte holds one
-    // code verbatim.
     for (i, &b) in buckets.iter().enumerate() {
         assert!(
             b <= mask,
@@ -366,7 +333,7 @@ impl Rank {
     /// loader's `n_vectors` ceiling. (Bounds the count, not the byte payload —
     /// see the loaders' separate `MAX_PAYLOAD` cap.) Also panics if the
     /// resulting row-major buffer length would overflow `usize` (reachable only
-    /// on 32-bit targets — see `util::checked_new_len`).
+    /// on 32-bit targets — see `util::checked_new_count`).
     pub fn add(&mut self, vectors: &[f32]) {
         let n = vectors.len() / self.dim;
         assert_eq!(
@@ -375,7 +342,7 @@ impl Rank {
             "vectors length must be a multiple of dim",
         );
         assert_all_finite(vectors);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n, self.dim);
+        let new_n = crate::util::checked_new_count(self.n_vectors, n, self.dim);
         let start = self.ranks.len();
         self.ranks.resize(start + n * self.dim, 0);
         let dim = self.dim;
@@ -886,10 +853,10 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "bits must be 1,2,4")]
+    #[should_panic(expected = "bits must be 1,2,4,8")]
     fn rankquant_norm_rejects_invalid_bits() {
-        // 3-bit packing has no RankQuant scheme; the norm must refuse it
-        // rather than return a value for a non-existent layout.
+        // Only byte-dividing RankQuant widths are valid; unsupported widths
+        // must fail loud instead of returning a norm for a non-existent layout.
         let _ = rankquant_norm(64, 3);
     }
 }

@@ -409,10 +409,9 @@ impl MultiBucketBitmap {
     /// forces the **portable scalar** diagonal kernel, bypassing the runtime
     /// AVX-512 dispatch. It exists so `examples/bench_contingency` can time the
     /// scalar and SIMD diagonal paths against each other on the same index
-    /// (mirroring the `#[doc(hidden)]` `search_asymmetric_byte_lut` bench
-    /// reference at the crate root). Not part of the stable API — production
-    /// callers use [`Self::diagonal_overlap_row`], which dispatches to the
-    /// fastest available kernel.
+    /// (mirroring the feature-gated byte-LUT bench reference). Not part of the
+    /// stable API — production callers use [`Self::diagonal_overlap_row`], which
+    /// dispatches to the fastest available kernel.
     ///
     /// # Panics
     /// Panics if `doc_idx >= len()` or `q_bitmaps.len() != nb * qpb`.

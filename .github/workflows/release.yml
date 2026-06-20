@@ -259,6 +259,7 @@ jobs:
           set -euo pipefail
           cargo test
           cargo test --features experimental
+          cargo test --features bench-utils
 
   notes:
     name: release notes (git-cliff) + draft Release

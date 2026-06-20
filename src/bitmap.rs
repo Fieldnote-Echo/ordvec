@@ -136,12 +136,12 @@ impl Bitmap {
     /// loader's `n_vectors` ceiling. (Bounds the count, not the byte payload —
     /// see the loaders' separate `MAX_PAYLOAD` cap.) Also panics if the
     /// resulting row-major buffer length would overflow `usize` (reachable only
-    /// on 32-bit targets — see `util::checked_new_len`).
+    /// on 32-bit targets — see `util::checked_new_count`).
     pub fn add(&mut self, vectors: &[f32]) {
         let n = vectors.len() / self.dim;
         assert_eq!(vectors.len(), n * self.dim);
         assert_all_finite(vectors);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n, self.qwords_per_vec);
+        let new_n = crate::util::checked_new_count(self.n_vectors, n, self.qwords_per_vec);
         let qpv = self.qwords_per_vec;
         let cutoff = (self.dim - self.n_top) as u16;
         let start = self.bitmaps.len();

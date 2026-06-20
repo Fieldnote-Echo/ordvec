@@ -4,7 +4,7 @@
 //!   path (full ranks, bucketed ranks, bitmap overlap).
 //! - [`l2_normalise`] returns the unit-norm copy of a query vector for
 //!   the asymmetric scoring path.
-//! - The checked-allocation guards (`result_buffer_len`, `checked_new_len`),
+//! - The checked-allocation guards (`result_buffer_len`, `checked_new_count`),
 //!   the finite-input assert (`assert_all_finite`), and the portable AND/XOR
 //!   popcount reductions (`and_popcount` / `xor_popcount`) round out the
 //!   shared helpers.
@@ -47,7 +47,7 @@ pub(crate) fn result_buffer_len(nq: usize, k: usize) -> usize {
 
 /// Validate that an `add` would not grow an index past
 /// `rank_io::MAX_VECTORS`, **and** that the resulting row-major buffer of
-/// `new_n * elems_per_vec` elements still fits `usize`. Returns the new length.
+/// `new_n * elems_per_vec` elements still fits `usize`. Returns the new count.
 ///
 /// The on-disk loaders cap `n_vectors` at `MAX_VECTORS` (64 Mi); the four
 /// in-memory growth paths (`Rank` / `RankQuant` / `Bitmap` / `SignBitmap`
@@ -66,7 +66,7 @@ pub(crate) fn result_buffer_len(nq: usize, k: usize) -> usize {
 /// buffer (issue #25). The *count* cap is the `u32` / round-trip contract; the
 /// byte payload is bounded separately by the loaders' `MAX_PAYLOAD` cap.
 #[inline]
-pub(crate) fn checked_new_len(current: usize, adding: usize, elems_per_vec: usize) -> usize {
+pub(crate) fn checked_new_count(current: usize, adding: usize, elems_per_vec: usize) -> usize {
     let new_n = current
         .checked_add(adding)
         .expect("ordvec: n_vectors overflows usize");
@@ -81,21 +81,18 @@ pub(crate) fn checked_new_len(current: usize, adding: usize, elems_per_vec: usiz
     new_n
 }
 
+const L2_NORMALISE_EPSILON: f32 = 1e-12;
+
 /// Unit-L2 copy of `v`, used by the asymmetric scoring path.
 ///
 /// **Degenerate queries are intentional, not errors.** A query with L2 norm
-/// `≤ 1e-12` (the all-zero vector, or one numerically indistinguishable from
-/// it) has no direction, so its unit copy is the zero vector. The asymmetric
-/// score is then `0` for every document: they all tie, and the returned top-k
-/// is an arbitrary — though deterministic, via the `(score, doc_id)`
-/// tie-break — prefix of the corpus. This is the correct outcome for a
-/// retrieval substrate (a directionless query has no nearest neighbour), and
-/// it is deliberately *silent*: the input is finite and valid, so it is not
-/// rejected the way NaN/±Inf are by [`assert_all_finite`]. Callers that treat
-/// an all-zero query as an upstream bug should check `‖q‖` before searching.
+/// `≤ L2_NORMALISE_EPSILON` (the all-zero vector, or one numerically
+/// indistinguishable from it) has no direction, so its unit copy is the zero
+/// vector. Callers that treat this as an upstream bug should check `‖q‖`
+/// before searching.
 pub(crate) fn l2_normalise(v: &[f32]) -> Vec<f32> {
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm <= 1e-12 {
+    if norm <= L2_NORMALISE_EPSILON {
         vec![0.0; v.len()]
     } else {
         let inv = 1.0 / norm;
@@ -109,7 +106,7 @@ pub(crate) fn l2_normalise(v: &[f32]) -> Vec<f32> {
 pub(crate) fn l2_normalise_into(out: &mut Vec<f32>, v: &[f32]) {
     out.clear();
     let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm <= 1e-12 {
+    if norm <= L2_NORMALISE_EPSILON {
         out.resize(v.len(), 0.0);
     } else {
         let inv = 1.0 / norm;
@@ -600,7 +597,10 @@ impl TopK {
 
 #[cfg(test)]
 mod tests {
-    use super::{and_popcount, checked_new_len, xor_popcount, TopK};
+    use super::{
+        and_popcount, checked_new_count, l2_normalise, l2_normalise_into, xor_popcount, TopK,
+        L2_NORMALISE_EPSILON,
+    };
     use rand::{RngExt, SeedableRng};
     use rand_chacha::ChaCha8Rng;
 
@@ -676,47 +676,47 @@ mod tests {
     }
 
     #[test]
-    fn checked_new_len_accepts_up_to_max() {
+    fn checked_new_count_accepts_up_to_max() {
         use crate::rank_io::MAX_VECTORS;
         // Exactly MAX_VECTORS is allowed — the loaders accept the same ceiling,
         // so a freshly grown index stays write/load round-trippable. (elems=1
         // isolates the count cap from the buffer-size check.)
-        assert_eq!(checked_new_len(0, MAX_VECTORS, 1), MAX_VECTORS);
-        assert_eq!(checked_new_len(MAX_VECTORS - 1, 1, 1), MAX_VECTORS);
+        assert_eq!(checked_new_count(0, MAX_VECTORS, 1), MAX_VECTORS);
+        assert_eq!(checked_new_count(MAX_VECTORS - 1, 1, 1), MAX_VECTORS);
         // An empty add never trips the guard.
-        assert_eq!(checked_new_len(MAX_VECTORS, 0, 1), MAX_VECTORS);
+        assert_eq!(checked_new_count(MAX_VECTORS, 0, 1), MAX_VECTORS);
         // MAX_VECTORS * 4096 = 2^38 fits usize on 64-bit; on 32-bit it overflows,
         // which the guard correctly panics on (see
-        // `checked_new_len_rejects_buffer_overflow`). Gate the success assertion
+        // `checked_new_count_rejects_buffer_overflow`). Gate the success assertion
         // to 64-bit so the suite stays portable (wasm32 / armv7).
         #[cfg(target_pointer_width = "64")]
         {
-            assert_eq!(checked_new_len(0, MAX_VECTORS, 4096), MAX_VECTORS);
+            assert_eq!(checked_new_count(0, MAX_VECTORS, 4096), MAX_VECTORS);
         }
     }
 
     #[test]
     #[should_panic(expected = "MAX_VECTORS")]
-    fn checked_new_len_rejects_one_past_max() {
+    fn checked_new_count_rejects_one_past_max() {
         use crate::rank_io::MAX_VECTORS;
         // One past the loader ceiling must fail loud rather than build an index
         // that write/load would refuse to round-trip.
-        let _ = checked_new_len(MAX_VECTORS, 1, 1);
+        let _ = checked_new_count(MAX_VECTORS, 1, 1);
     }
 
     #[test]
     #[should_panic(expected = "n_vectors overflows usize")]
-    fn checked_new_len_rejects_usize_overflow() {
+    fn checked_new_count_rejects_usize_overflow() {
         // The running count itself must not wrap before the cap is checked.
-        let _ = checked_new_len(usize::MAX, 1, 1);
+        let _ = checked_new_count(usize::MAX, 1, 1);
     }
 
     #[test]
     #[should_panic(expected = "buffer length")]
-    fn checked_new_len_rejects_buffer_overflow() {
+    fn checked_new_count_rejects_buffer_overflow() {
         // Count is within MAX_VECTORS, but new_n * elems_per_vec overflows
         // usize — the 32-bit (wasm32) hazard the `resize` in `add` would hit.
-        let _ = checked_new_len(0, 2, usize::MAX);
+        let _ = checked_new_count(0, 2, usize::MAX);
     }
 
     #[test]
@@ -767,7 +767,6 @@ mod tests {
 
     #[test]
     fn l2_normalise_into_matches_l2_normalise_and_reuses_capacity() {
-        use super::{l2_normalise, l2_normalise_into};
         let v = vec![3.0f32, 0.0, 4.0, 0.0]; // norm 5
         let expected = l2_normalise(&v);
         let mut out: Vec<f32> = Vec::new();
@@ -784,5 +783,23 @@ mod tests {
         };
         l2_normalise_into(&mut out, &v);
         assert_eq!(out.capacity(), cap, "l2_normalise_into must reuse capacity");
+    }
+
+    #[test]
+    fn l2_normalise_threshold_edges_are_pinned() {
+        let below = vec![L2_NORMALISE_EPSILON * 0.5, 0.0];
+        assert_eq!(l2_normalise(&below), vec![0.0, 0.0]);
+
+        let at = vec![L2_NORMALISE_EPSILON, 0.0];
+        assert_eq!(l2_normalise(&at), vec![0.0, 0.0]);
+
+        let above = vec![L2_NORMALISE_EPSILON * 2.0, 0.0];
+        assert_eq!(l2_normalise(&above), vec![1.0, 0.0]);
+
+        let mut out = Vec::new();
+        l2_normalise_into(&mut out, &below);
+        assert_eq!(out, vec![0.0, 0.0]);
+        l2_normalise_into(&mut out, &above);
+        assert_eq!(out, vec![1.0, 0.0]);
     }
 }

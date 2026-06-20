@@ -81,10 +81,18 @@ rand_chacha = "0.10"
 # (research scaffold), kept off the stable surface.
 experimental = []
 serde = ["dep:serde"]
+# `bench-utils` exposes benchmark-only reference paths used by examples and
+# parity tests. These helpers are not part of the default public API.
+bench-utils = []
 # `test-utils` exposes internal dispatch probes used by the crate's own integration
 # tests (e.g. the allocation-free guarantee check). Gated off the default surface
 # because these helpers are not part of the public API and carry no semver guarantee.
 test-utils = []
+
+[[example]]
+name = "bench_rank"
+path = "examples/bench_rank.rs"
+required-features = ["bench-utils"]
 
 [profile.release]
 lto = true

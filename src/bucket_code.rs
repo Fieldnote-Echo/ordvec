@@ -14,8 +14,8 @@
 //!   exactly `dim / buckets` coordinates. It owns the code-validation rules:
 //!   length, range, and per-bucket occupancy.
 //! - [`RankQuantSpec`] — the RankQuant-shaped specialisation: `buckets`
-//!   derived as `1 << bits` for `bits ∈ {1, 2, 4}`, matching the crate's
-//!   [`crate::RankQuant`] bit-width domain.
+//!   derived as `1 << bits` for `bits ∈ {1, 2, 4, 8}` when the fixed-composition
+//!   invariant exists.
 //! - [`BucketCode`] — a single validated code vector against a
 //!   [`CompositionSpec`], built from raw codes, from a rank permutation
 //!   ([`BucketCode::from_ranks`]), or directly from a float vector
@@ -43,8 +43,8 @@
 //! delegates to the crate's shared [`crate::rank`] primitives, so callers
 //! no longer need to fork rank or bucket semantics.
 //!
-//! Two intentional constraints to note: `bits = 8` is rejected (it lands as a
-//! capability-gated width in the separate b=8 work, #221), and
+//! Two intentional constraints to note: `bits = 8` requires `dim % 256 == 0`
+//! because this surface validates fixed-composition codes, and
 //! [`CompositionSpec::new`] rejects `buckets > 256` (codes are `u8`).
 
 use std::error::Error;
@@ -177,9 +177,13 @@ impl CompositionSpec {
 /// RankQuant-shaped fixed-composition code parameters.
 ///
 /// Specialises [`CompositionSpec`] to the crate's RankQuant bit-width domain:
-/// the bucket count is `1 << bits` for `bits ∈ {1, 2, 4}`, and `dim` is capped
-/// at `u16::MAX` to mirror the crate-wide rank invariant (a rank vector is a
-/// permutation of `[0, dim)` stored as `u16`).
+/// the bucket count is `1 << bits` for `bits ∈ {1, 2, 4, 8}`. Because this type
+/// models fixed-composition codes, `bits = 8` is valid only when
+/// `dim % 256 == 0`; arbitrary-dimension asymmetric-only b=8 remains a
+/// [`crate::RankQuant`] index capability, not a composition spec.
+///
+/// `dim` is capped at `u16::MAX` to mirror the crate-wide rank invariant
+/// (a rank vector is a permutation of `[0, dim)` stored as `u16`).
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct RankQuantSpec {
     bits: u8,
@@ -190,14 +194,11 @@ impl RankQuantSpec {
     /// Build a RankQuant spec for `dim` coordinates at `bits` bits/coordinate.
     ///
     /// # Errors
-    /// - [`CompositionViolation::InvalidBits`] if `bits ∉ {1, 2, 4}`. This is
-    ///   the crate's [`crate::RankQuant`] bit-width domain — the reference
-    ///   prototype also accepted `8`, but ordvec's packed format and analytical
-    ///   norm are defined only for `{1, 2, 4}`, so 8-bit is rejected here.
+    /// - [`CompositionViolation::InvalidBits`] if `bits ∉ {1, 2, 4, 8}`.
     /// - [`CompositionViolation::DimTooLarge`] if `dim > u16::MAX`.
     /// - the [`CompositionSpec::new`] errors (non-divisible `dim`).
     pub fn new(dim: usize, bits: u8) -> Result<Self, CompositionViolation> {
-        if !matches!(bits, 1 | 2 | 4) {
+        if !matches!(bits, 1 | 2 | 4 | 8) {
             return Err(CompositionViolation::InvalidBits { bits });
         }
         if dim > u16::MAX as usize {
@@ -213,7 +214,7 @@ impl RankQuantSpec {
         })
     }
 
-    /// Bits per coordinate (`1`, `2`, or `4`).
+    /// Bits per coordinate (`1`, `2`, `4`, or fixed-composition `8`).
     pub fn bits(&self) -> u8 {
         self.bits
     }
@@ -317,8 +318,8 @@ impl BucketCode {
     /// panicking inside the rank primitives.
     ///
     /// # Errors
-    /// - the [`RankQuantSpec::new`] errors (`bits ∉ {1, 2, 4}`, `dim` too large
-    ///   or non-divisible).
+    /// - the [`RankQuantSpec::new`] errors (`bits ∉ {1, 2, 4, 8}`, `dim` too
+    ///   large or non-divisible).
     /// - [`CompositionViolation::WrongLength`] if `vector.len() != dim`.
     /// - [`CompositionViolation::NonFiniteValue`] on the first non-finite
     ///   coordinate.
@@ -383,7 +384,7 @@ impl BucketCode {
 pub enum CompositionViolation {
     /// A structural spec parameter was invalid (`dim == 0`, `buckets < 2`).
     InvalidSpec(&'static str),
-    /// `bits` was outside the supported RankQuant set `{1, 2, 4}`.
+    /// `bits` was outside the supported RankQuant set `{1, 2, 4, 8}`.
     InvalidBits {
         /// The rejected bit width.
         bits: u8,
@@ -453,7 +454,7 @@ impl fmt::Display for CompositionViolation {
         match self {
             Self::InvalidSpec(message) => write!(f, "{message}"),
             Self::InvalidBits { bits } => {
-                write!(f, "bits {bits} is invalid; expected one of 1, 2, 4")
+                write!(f, "bits {bits} is invalid; expected one of 1, 2, 4, 8")
             }
             Self::DimTooLarge { dim, max } => write!(f, "dim {dim} exceeds maximum {max}"),
             Self::NonUniformSpec { dim, buckets } => {
@@ -555,19 +556,29 @@ mod tests {
         );
     }
 
-    // Pin the b=8 decision: the reference prototype accepted bits=8 but ordvec
-    // rejects it. These tests ensure that boundary cannot change silently.
     #[test]
-    fn rankquant_spec_rejects_bits_8() {
+    fn rankquant_spec_accepts_fixed_composition_bits_8() {
+        let spec = RankQuantSpec::new(512, 8).unwrap();
+        assert_eq!(spec.bits(), 8);
+        assert_eq!(spec.composition().buckets(), 256);
+        assert_eq!(spec.composition().expected_per_bucket(), 2);
+
+        let v: Vec<f32> = (0..512).map(|i| i as f32).collect();
+        let code = BucketCode::from_vector(512, 8, &v).unwrap();
+        assert_eq!(code.spec().buckets(), 256);
+        assert_eq!(code.spec().expected_per_bucket(), 2);
+        assert_eq!(code.codes()[0], 0);
+        assert_eq!(code.codes()[511], 255);
+    }
+
+    #[test]
+    fn rankquant_spec_rejects_non_fixed_composition_bits_8() {
         assert_eq!(
-            RankQuantSpec::new(8, 8).unwrap_err(),
-            CompositionViolation::InvalidBits { bits: 8 }
-        );
-        // `from_vector` takes the same path: bits=8 is rejected at the spec level.
-        let v: Vec<f32> = (0..8).map(|i| i as f32).collect();
-        assert_eq!(
-            BucketCode::from_vector(8, 8, &v).unwrap_err(),
-            CompositionViolation::InvalidBits { bits: 8 }
+            RankQuantSpec::new(384, 8).unwrap_err(),
+            CompositionViolation::NonUniformSpec {
+                dim: 384,
+                buckets: 256,
+            }
         );
     }
 

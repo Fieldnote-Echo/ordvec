@@ -437,7 +437,7 @@ the **quality numbers (R@10, candidate-recall, bytes/vec) are deterministic**
 and regenerable from a clean checkout with no external corpus file:
 
 ```sh
-cargo run --release --example bench_rank
+cargo run --release --features bench-utils --example bench_rank
 ```
 
 A few operating points from the committed run

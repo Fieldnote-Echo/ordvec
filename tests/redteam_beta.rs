@@ -27,8 +27,9 @@ use rand::{RngExt, SeedableRng};
 use rand_chacha::ChaCha8Rng;
 
 use ordvec::rank::{bucket_centre, bucket_ranks, rank_transform, rankquant_norm};
-use ordvec::search_asymmetric_byte_lut;
-use ordvec::{Rank, RankQuant, SearchResults, SignBitmap};
+#[cfg(feature = "bench-utils")]
+use ordvec::SearchResults;
+use ordvec::{Rank, RankQuant, SignBitmap};
 
 fn make_corpus(seed: u64, n: usize, dim: usize) -> Vec<f32> {
     let mut rng = ChaCha8Rng::seed_from_u64(seed);
@@ -71,7 +72,10 @@ fn ref_rankquant_asymmetric(query: &[f32], doc: &[f32], bits: u8) -> f32 {
 //   - 768 b4: production-scale AVX-512 happy path
 // -------------------------------------------------------------------
 
+#[cfg(feature = "bench-utils")]
 fn assert_asym_matches_byte_lut(dim: usize, bits: u8, seed: u64) {
+    use ordvec::search_asymmetric_byte_lut;
+
     let n = 64;
     let corpus = make_corpus(seed, n, dim);
     let mut idx = RankQuant::new(dim, bits);
@@ -115,36 +119,43 @@ fn assert_asym_matches_byte_lut(dim: usize, bits: u8, seed: u64) {
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rt2_asym_b2_dim48_matches_scalar() {
     assert_asym_matches_byte_lut(48, 2, 101);
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rt2_asym_b4_dim80_matches_scalar() {
     assert_asym_matches_byte_lut(80, 4, 102);
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rt2_asym_b2_dim20_matches_scalar() {
     assert_asym_matches_byte_lut(20, 2, 103);
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rt2_asym_b2_dim4_matches_scalar() {
     assert_asym_matches_byte_lut(4, 2, 104);
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rt2_asym_b2_dim64_happy_path_matches_scalar() {
     assert_asym_matches_byte_lut(64, 2, 105);
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rt2_asym_b4_dim128_happy_path_matches_scalar() {
     assert_asym_matches_byte_lut(128, 4, 106);
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rt2_asym_b4_dim768_happy_path_matches_scalar() {
     assert_asym_matches_byte_lut(768, 4, 107);
 }
@@ -288,7 +299,10 @@ fn sign_bitmap_top_m_huge_m_clamps() {
 // -------------------------------------------------------------------
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn byte_lut_huge_k_clamps_no_overflow() {
+    use ordvec::search_asymmetric_byte_lut;
+
     let dim = 64;
     let n = 16;
     let corpus = make_corpus(501, n, dim);
@@ -312,7 +326,10 @@ fn byte_lut_huge_k_clamps_no_overflow() {
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn byte_lut_huge_k_multi_query_clamps_no_overflow() {
+    use ordvec::search_asymmetric_byte_lut;
+
     // Multi-query exercises the `nq * k` result-buffer axis (Finding 1):
     // with the raw `usize::MAX` the product `nq * k` overflows usize and
     // would silently wrap to a too-small Vec; `result_buffer_len` turns

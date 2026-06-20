@@ -108,13 +108,10 @@ pub use rank_io::{probe_index_metadata, IndexKind, IndexMetadata, IndexParams};
 pub use sign_bitmap::CandidateBatch;
 pub use sign_bitmap::SignBitmap;
 
-// `search_asymmetric_byte_lut` is a bench-only scoring reference: it
-// panics on b=1 and exists so `examples/bench_rank` can compare the
-// byte-LUT path against the production AVX kernels on the same data.
-// Re-exported `#[doc(hidden)]` — reachable for the example and the
-// red-team parity tests, but not part of the headline API. Production
-// callers use `RankQuant::search_asymmetric`, whose dispatch routes
-// every supported bit width to a non-panicking kernel.
+// Bench-only scoring reference for `examples/bench_rank` and parity tests.
+// Gated off the default public API surface; production callers use
+// `RankQuant::search_asymmetric`.
+#[cfg(feature = "bench-utils")]
 #[doc(hidden)]
 pub use quant::search_asymmetric_byte_lut;
 

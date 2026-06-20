@@ -65,9 +65,9 @@ The `experimental` feature is a default-off research surface. Today it exposes
 normal pre-1.0 compatibility policy above. Its direct `.ovfs`
 `RankQuantFastscan::{write,load}` path is supported, but in v0.5.0 `.ovfs` is
 not yet part of the primitive persisted-format, `probe_index_metadata()`, or
-`ordvec-manifest` v1 contract. `#[doc(hidden)]` exports such as
+`ordvec-manifest` v1 contract. Feature-gated `#[doc(hidden)]` exports such as
 `search_asymmetric_byte_lut` are reachable for internal benchmarks and parity
-tests, but are not part of the stable default API.
+tests only when explicitly enabled, and are not part of the stable default API.
 
 New feature flags must declare their stability class before merging:
 

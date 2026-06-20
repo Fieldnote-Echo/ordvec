@@ -18,10 +18,9 @@
 //! gather against the `dim * 256` LUT: an AVX-512 `vgatherdps` kernel when
 //! available (`avx512f` + `avx512bw` + `dim % 16 == 0`), else the portable scalar LUT.
 //!
-//! The byte-LUT path ([`search_asymmetric_byte_lut`]) is re-exported
-//! `#[doc(hidden)]` (reachable as `ordvec::search_asymmetric_byte_lut`)
-//! so `examples/bench_rank.rs` can compare it against the production
-//! AVX path on the same data.
+//! The byte-LUT reference path is available only with the non-default
+//! `bench-utils` feature so `examples/bench_rank.rs` can compare it against
+//! the production AVX path on the same data.
 
 use rayon::prelude::*;
 
@@ -584,7 +583,7 @@ impl RankQuant {
     /// loader's `n_vectors` ceiling. (Bounds the count, not the byte payload —
     /// see the loaders' separate `MAX_PAYLOAD` cap.) Also panics if the
     /// resulting row-major buffer length would overflow `usize` (reachable only
-    /// on 32-bit targets — see `util::checked_new_len`).
+    /// on 32-bit targets — see `util::checked_new_count`).
     pub fn add(&mut self, vectors: &[f32]) {
         let n = vectors.len() / self.dim;
         assert_eq!(
@@ -594,7 +593,7 @@ impl RankQuant {
         );
         assert_all_finite(vectors);
         let bytes_per_vec = rankquant_bytes_per_vec(self.dim, self.bits);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n, bytes_per_vec);
+        let new_n = crate::util::checked_new_count(self.n_vectors, n, bytes_per_vec);
         let start = self.packed.len();
         self.packed.resize(start + n * bytes_per_vec, 0);
         let dim = self.dim;
@@ -1624,14 +1623,15 @@ pub fn rankquant_eval_search(
 //   B=2: 256 groups × 256 entries × 4 B = 256 KiB per query (fits L2)
 //   B=4: 512 groups × 256 entries × 4 B = 512 KiB per query (spills L2 a little)
 //
-// Re-exported `#[doc(hidden)]` for benchmarking. Production callers should reach
-// for [`RankQuant::search_asymmetric`] which dispatches to the
-// fastest implementation for the current CPU.
+// Available behind `bench-utils` for benchmarking. Production callers should
+// reach for `RankQuant::search_asymmetric`, which dispatches to the fastest
+// implementation for the current CPU.
 // -------------------------------------------------------------------
 
 /// Build the byte-LUT for B=2 asymmetric: `lut[g * 256 + byte]` is the
 /// f32 contribution of `doc[g] == byte` to the score, summed across
 /// the 4 coordinates packed into that byte.
+#[cfg(feature = "bench-utils")]
 fn build_byte_lut_b2(q_unit: &[f32]) -> Vec<f32> {
     let dim = q_unit.len();
     debug_assert_eq!(dim % 4, 0);
@@ -1654,6 +1654,7 @@ fn build_byte_lut_b2(q_unit: &[f32]) -> Vec<f32> {
 }
 
 /// Build the byte-LUT for B=4 asymmetric.
+#[cfg(feature = "bench-utils")]
 fn build_byte_lut_b4(q_unit: &[f32]) -> Vec<f32> {
     let dim = q_unit.len();
     debug_assert_eq!(dim % 2, 0);
@@ -1672,6 +1673,7 @@ fn build_byte_lut_b4(q_unit: &[f32]) -> Vec<f32> {
 }
 
 /// Scalar byte-LUT scan for B=2 asymmetric. One add per doc byte.
+#[cfg(feature = "bench-utils")]
 fn scan_b2_asym_byte_lut(
     packed: &[u8],
     n: usize,
@@ -1693,6 +1695,7 @@ fn scan_b2_asym_byte_lut(
 }
 
 /// Scalar byte-LUT scan for B=4 asymmetric.
+#[cfg(feature = "bench-utils")]
 fn scan_b4_asym_byte_lut(
     packed: &[u8],
     n: usize,
@@ -1728,6 +1731,7 @@ fn scan_b4_asym_byte_lut(
 ///
 /// Returns the raw `Vec<i64>` of doc indices per query, length
 /// `queries.len() / dim * k`.
+#[cfg(feature = "bench-utils")]
 pub fn search_asymmetric_byte_lut(index: &RankQuant, queries: &[f32], k: usize) -> SearchResults {
     let dim = index.dim;
     let bits = index.bits;
