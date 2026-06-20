@@ -47,7 +47,7 @@ assuming `k` rows back.
 ## Theory and calibration
 
 `Bitmap` exposes the constant-weight top-bucket overlap statistic formalized in
-[`ordvec-formalization`](https://github.com/Fieldnote-Echo/ordvec-formalization).
+[`ordvec-formalization`](https://github.com/Project-Navi/ordvec-formalization).
 In that finite Lean model, literal bitmap overlap is the query-preserving
 quotient statistic, an overlap threshold is Bayes-optimal under explicit
 monotone-overlap assumptions, and the idealized uniform constant-weight null
@@ -69,8 +69,10 @@ source needs a Rust toolchain (MSRV 1.89) and
 ## Safety contract
 
 The Python binding releases the GIL while Rust searches, scores, and mutates
-indexes. NumPy arrays passed to those methods are read in place while the call
-is active; do not mutate them from another thread until the method returns.
+indexes. Inputs that cross a GIL-released call are copied into Rust-owned
+buffers first, so ordinary Python in-place NumPy mutation from another thread
+cannot race the detached Rust scan. Large calls may temporarily require an
+additional input-sized buffer.
 The cross-language ownership and lifetime contract is maintained in
 [`docs/bindings-safety.md`](https://github.com/Project-Navi/ordvec/blob/v0.5.0/docs/bindings-safety.md)
 for this release line.

@@ -9,10 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Hardened the Python binding's GIL-released search, candidate, scoring, and
+  `add` paths: NumPy inputs are now copied into Rust-owned buffers before
+  `py.detach`, so safe Python code cannot race a detached Rust read by mutating
+  the same array from another thread. This intentionally trades zero-copy
+  detached reads for race-free copied inputs; large calls may temporarily require
+  an additional input-sized buffer.
 - Updated release governance to document and audit the two-approver
   `crates-io` / `pypi` GitHub Environment gates: `Fieldnote-Echo` and
   `toadkicker` are listed as required reviewers, self-review is blocked, and a
   30-minute wait timer applies before registry publish jobs can proceed.
+- Exposed the calibration-profile byte limit through the `ordvec-manifest`
+  Python bindings, including the default constant, `default_resource_limits()`,
+  and verifier/create keyword arguments.
+- Aligned `.ovfs` / `OVFS` security and provenance docs with the now-public
+  `RankQuantFastscan` persistence loader and fuzz target.
+- Updated formalization links and release invariants after the companion
+  `ordvec-formalization` repository moved under `Project-Navi`.
+
+### Fixed
+
+- Added a persisted-format registry that drives probe, manifest-coverage, and
+  C-ABI load decisions from one table; `.ovfs` now remains explicitly
+  known-but-not-probeable/not-manifest-covered, and the C ABI reports it as an
+  unsupported format rather than a corrupt index.
+- Hid the `SubsetScratch::capacities_for_test` helper behind the non-default
+  `test-utils` feature and cleaned stale release-doc comments around FastScan
+  and b=8 bucket rustdoc.
 
 ## 0.5.0 - 2026-06-19
 
