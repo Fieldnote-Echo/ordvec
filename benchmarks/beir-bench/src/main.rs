@@ -1057,7 +1057,10 @@ fn run_hnsw(
     // (each operating point on the recall/latency frontier is recorded distinctly).
     let slug = format!("hnsw_ef{}", cfg.ef_search);
     let slug = slug.as_str();
-    eprintln!("  building HNSW M={HNSW_M} ef_c={HNSW_EF_CONSTRUCTION} ef_s={} ({n_docs} docs) ...", cfg.ef_search);
+    eprintln!(
+        "  building HNSW M={HNSW_M} ef_c={HNSW_EF_CONSTRUCTION} ef_s={} ({n_docs} docs) ...",
+        cfg.ef_search
+    );
     // DistL2 (not DistDot): embeddings are unit-normalized, so min-L2 ≡ max-dot ≡
     // max-cosine — identical neighbors — but DistL2 avoids anndists' DistDot
     // `1-dot` distance assert, which panics on near-duplicate pairs whose float
