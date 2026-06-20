@@ -169,8 +169,10 @@ def test_search_asymmetric_snapshots_query_before_detach():
             mutable_queries[:, ::2] = 0.0
             mutations += 1
 
-        worker.join(timeout=5.0)
-        assert not worker.is_alive()
+        worker.join(timeout=60.0)
+        assert not worker.is_alive(), (
+            "search did not finish within the coverage-safe timeout"
+        )
         if errors:
             raise errors[0]
         assert mutations > 0, "search finished before mutation tripwire ran"
