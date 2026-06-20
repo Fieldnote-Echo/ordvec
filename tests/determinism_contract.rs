@@ -1,4 +1,4 @@
-use ordvec::{search_asymmetric_byte_lut, Bitmap, Rank, RankQuant, SignBitmap};
+use ordvec::{Bitmap, Rank, RankQuant, SignBitmap};
 
 fn repeated_docs(n: usize, dim: usize, value: f32) -> Vec<f32> {
     vec![value; n * dim]
@@ -49,7 +49,10 @@ fn full_search_ties_return_lowest_row_ids() {
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 fn rankquant_dispatch_matches_scalar_reference_on_ordered_ties() {
+    use ordvec::search_asymmetric_byte_lut;
+
     for &dim in &[20usize, 64] {
         let docs = repeated_docs(8, dim, 1.0);
         let query = vec![0.0; dim];

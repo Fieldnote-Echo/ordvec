@@ -65,6 +65,7 @@ fn rank_transform_rejects_nan() {
 }
 
 #[test]
+#[cfg(feature = "bench-utils")]
 #[should_panic(expected = "non-finite")]
 fn search_asymmetric_byte_lut_rejects_inf() {
     let mut idx = RankQuant::new(D, 2);

@@ -2,7 +2,9 @@ use ordvec::{
     validate_candidate_ids, validate_flat_vectors_len, Bitmap, OrdvecError, RankQuant, SignBitmap,
     TwoStageCandidatePolicy,
 };
+#[cfg(feature = "bench-utils")]
 use rand::{RngExt, SeedableRng};
+#[cfg(feature = "bench-utils")]
 use rand_chacha::ChaCha8Rng;
 
 use crate::{make_corpus, D, N};
@@ -697,6 +699,7 @@ fn batched_serial_wrapper_matches_into_and_full_set_matches_search_asymmetric() 
 /// Scores compared within the existing kernel parity tolerance, NOT byte-identical
 /// across tiers. (Same convention as redteam_beta + determinism_contract.)
 #[test]
+#[cfg(feature = "bench-utils")]
 fn batched_subset_rerank_matches_scalar_reference_across_tiers() {
     use ordvec::search_asymmetric_byte_lut;
     for dim in [64usize, 80, 128] {

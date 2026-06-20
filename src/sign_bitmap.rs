@@ -175,12 +175,12 @@ impl SignBitmap {
     /// loader's `n_vectors` ceiling. (Bounds the count, not the byte payload —
     /// see the loaders' separate `MAX_PAYLOAD` cap.) Also panics if the
     /// resulting row-major buffer length would overflow `usize` (reachable only
-    /// on 32-bit targets — see `util::checked_new_len`).
+    /// on 32-bit targets — see `util::checked_new_count`).
     pub fn add(&mut self, vectors: &[f32]) {
         crate::util::assert_all_finite(vectors);
         let n = vectors.len() / self.dim;
         assert_eq!(vectors.len(), n * self.dim);
-        let new_n = crate::util::checked_new_len(self.n_vectors, n, self.qwords_per_vec);
+        let new_n = crate::util::checked_new_count(self.n_vectors, n, self.qwords_per_vec);
         let qpv = self.qwords_per_vec;
         let dim = self.dim;
         let start = self.bitmaps.len();

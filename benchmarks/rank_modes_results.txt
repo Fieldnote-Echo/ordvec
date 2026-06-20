@@ -4,7 +4,7 @@
 # external corpus file required — the corpus is generated in-process from
 # a fixed seed):
 #
-#     cargo run --release --example bench_rank
+#     cargo run --release --features bench-utils --example bench_rank
 #
 # No system dependencies are required — ordvec links no BLAS.
 #
@@ -47,7 +47,7 @@
 # To benchmark a real public corpus instead (e.g. GloVe / OpenAI
 # text-embedding-3 dumps), pass 2-D little-endian float32 .npy files (C
 # order); not required for the default run:
-#     cargo run --release --example bench_rank -- \
+#     cargo run --release --features bench-utils --example bench_rank -- \
 #         --corpus-npy /path/to/corpus.npy --queries-npy /path/to/queries.npy
 # ===========================================================================
 
