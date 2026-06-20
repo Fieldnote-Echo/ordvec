@@ -147,12 +147,12 @@ def test_search_asymmetric_snapshots_query_before_detach():
     for _ in range(3):
         mutable_queries = queries.copy()
         result: dict[str, tuple[np.ndarray, np.ndarray]] = {}
-        errors: list[BaseException] = []
+        errors: list[Exception] = []
 
         def run_search() -> None:
             try:
                 result["out"] = idx.search_asymmetric(mutable_queries, k=8)
-            except BaseException as exc:  # pragma: no cover - re-raised below
+            except Exception as exc:  # pragma: no cover - re-raised below
                 errors.append(exc)
 
         worker = threading.Thread(target=run_search)
