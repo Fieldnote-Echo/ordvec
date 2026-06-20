@@ -445,6 +445,7 @@ jobs:
           set -euo pipefail
           cargo test
           cargo test --features experimental
+          cargo test --features bench-utils
 
   # ----------------------------------------------------------------------
   # WASM: the bitmap/sign popcount kernels have a `simd128` path
