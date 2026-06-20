@@ -170,7 +170,7 @@ are machine-checked in Lean 4, both `sorry`-free on Lean's standard axiom base
   signal model makes an overlap-count threshold Bayes-optimal among
   deterministic admission rules, and the uniform constant-weight bitmap null
   assigns that same threshold event exactly the hypergeometric upper tail — in
-  [`ordvec-formalization`](https://github.com/Fieldnote-Echo/ordvec-formalization)
+  [`ordvec-formalization`](https://github.com/Project-Navi/ordvec-formalization)
   (theorem `exists_uniformBitmapOverlapTail_finiteBayesRisk_le_and_hypergeomTail`).
 
 This is an *in-model* result. It proves the rule shape and the idealized finite
@@ -276,9 +276,10 @@ The runtime dependency floor is `numpy>=2.2`.
 The consolidated cross-language ownership and lifetime contract is in
 [`docs/bindings-safety.md`](docs/bindings-safety.md).
 
-Python search, candidate-generation, and scoring methods release the GIL and
-read NumPy inputs in place. Callers must not mutate query, corpus, candidate,
-or scoring input arrays passed to those methods until the call returns.
+Python search, candidate-generation, scoring, and `add` methods release the GIL
+after copying NumPy inputs into Rust-owned buffers, so ordinary Python in-place
+array mutation in another thread cannot race the detached Rust scan. Large calls
+may temporarily require an additional input-sized buffer.
 
 The C ABI allows concurrent search and info calls on one loaded handle.
 `ordvec_index_free` must not race with any other call on the same handle.
@@ -310,10 +311,10 @@ candidate slices passed to `Search` until the call returns.
   [`docs/compatibility-policy.md`](docs/compatibility-policy.md) defines the
   stable, experimental, repo-local sidecar, persisted-format, examples/docs,
   MSRV, and release-note review surfaces.
-- **Formal proof spine:** [`ordvec-formalization`](https://github.com/Fieldnote-Echo/ordvec-formalization),
-  including its [`proof-spine`](https://github.com/Fieldnote-Echo/ordvec-formalization/blob/main/docs/proof-spine.md),
-  [`theorem-map`](https://github.com/Fieldnote-Echo/ordvec-formalization/blob/main/docs/theorem-map.md),
-  and [`reviewer brief`](https://github.com/Fieldnote-Echo/ordvec-formalization/blob/main/docs/reviewer-brief.md).
+- **Formal proof spine:** [`ordvec-formalization`](https://github.com/Project-Navi/ordvec-formalization),
+  including its [`proof-spine`](https://github.com/Project-Navi/ordvec-formalization/blob/main/docs/proof-spine.md),
+  [`theorem-map`](https://github.com/Project-Navi/ordvec-formalization/blob/main/docs/theorem-map.md),
+  and [`reviewer brief`](https://github.com/Project-Navi/ordvec-formalization/blob/main/docs/reviewer-brief.md).
 - **API docs:** <https://docs.rs/ordvec>, <https://docs.rs/ordvec-manifest>
 - **Paper (OrdVec / RankQuant):** _link TBD — see
   [Research collaboration](#research-collaboration)._
